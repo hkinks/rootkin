@@ -291,13 +291,8 @@ impl Node {
 /// UTF-8 (with or without BOM) or UTF-16; invalid UTF-8 is read as Latin-1.
 fn decode(bytes: &[u8], warnings: &mut Vec<String>) -> String {
     let utf16 = |data: &[u8], le: bool| {
-        let units = data.chunks_exact(2).map(|c| {
-            if le {
-                u16::from_le_bytes([c[0], c[1]])
-            } else {
-                u16::from_be_bytes([c[0], c[1]])
-            }
-        });
+        let units =
+            data.as_chunks::<2>().0.iter().map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) });
         char::decode_utf16(units).map(|r| r.unwrap_or('\u{fffd}')).collect::<String>()
     };
     match bytes {
