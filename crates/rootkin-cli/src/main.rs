@@ -12,7 +12,11 @@ const USAGE: &str = "usage:
   rootkin-cli roundtrip <file.familyx>        verify decode/encode is lossless
   rootkin-cli summary <file.familyx>          list people
   rootkin-cli check <file.familyx>            report dangling references
-  rootkin-cli example <out.familyx>           write a fictional example family";
+  rootkin-cli example <out.familyx>           write a fictional example family
+  rootkin-cli import <in.ged|in.gramps> <out.familyx>
+                                          convert a GEDCOM / Gramps file, print what was dropped
+  rootkin-cli export <tree.familyx> <out.ged|out.gramps>
+                                          write a GEDCOM 5.5.1 / Gramps XML file";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -58,6 +62,18 @@ fn main() -> Result<()> {
                 bail!("generated tree is inconsistent: {problems:?}");
             }
             std::fs::write(out, pkg.to_bytes()?)?;
+        }
+        ["import", file, out] => {
+            let (pkg, report) = rootkin_formats::import_path(file).context("import")?;
+            pkg.save(out)?;
+            println!("imported {} people, {} families", report.people, report.families);
+            for w in &report.warnings {
+                println!("warning: {w}");
+            }
+        }
+        ["export", file, out] => {
+            let pkg = Package::open(file).context("open")?;
+            rootkin_formats::export_path(&pkg, out).context("export")?;
         }
         ["check", file] => {
             let problems = familyx::edit::check(&Package::open(file).context("open")?.doc);

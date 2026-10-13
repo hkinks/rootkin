@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/familyx", "crates/rootkin-cli", "crates/rootkin"]
+members = ["crates/familyx", "crates/rootkin-cli", "crates/rootkin", "crates/rootkin-formats"]
 
 [workspace.package]
 edition = "2021"

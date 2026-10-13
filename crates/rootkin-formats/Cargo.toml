@@ -1,0 +1,19 @@
+[package]
+name = "rootkin-formats"
+description = "Import and export genealogy formats (GEDCOM, Gramps XML) for Rootkin"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[dependencies]
+familyx = { path = "../familyx" }
+flate2 = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+thiserror = "2"

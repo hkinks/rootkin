@@ -2977,6 +2977,17 @@ dependencies = [
  "anyhow",
  "familyx",
  "image",
+ "rootkin-formats",
+]
+
+[[package]]
+name = "rootkin-formats"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "familyx",
+ "flate2",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

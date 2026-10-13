@@ -28,17 +28,17 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 
 Goal: import (and where sensible export) as many genealogy formats as possible.
 
-Planned crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-specific.
+Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-specific.
 
-- [ ] GEDCOM 5.5.1 export: INDI (NAME `Given /Surname/`, SEX, events with DATE/PLAC),
+- [x] GEDCOM 5.5.1 export: INDI (NAME `Given /Surname/`, SEX, events with DATE/PLAC),
       FAM per couple (HUSB/WIFE/MARR/CHIL), single-parent FAM, `PEDI adopted`
-- [ ] GEDCOM import into a new `.familyx` via the edit API; inexpressible dates
-      (BEF/AFT/BET…) kept as text in details; import report of dropped data
-- [ ] Gramps XML (`.gramps`, gzip) export: people, events, places, families with handles
-- [ ] Gramps XML import
-- [ ] CLI: `rootkin-cli export tree.familyx out.ged|out.gramps`, `rootkin-cli import in.ged|in.gramps out.familyx`
+- [x] GEDCOM import into a new `.familyx` via the edit API; dates mapped onto DateDescriptor
+      (BEF/AFT/BET… native, unparseable as text); import report of dropped data
+- [x] Gramps XML (`.gramps`, gzip) export: people, events, places, families with handles
+- [x] Gramps XML import
+- [x] CLI: `rootkin-cli export tree.familyx out.ged|out.gramps`, `rootkin-cli import in.ged|in.gramps out.familyx`
 - [ ] Editor: File → Import… (opens as new unsaved tree), File → Export…
-- [ ] Tests: example tree → GEDCOM → familyx and → Gramps → familyx preserve people/links/facts;
+- [x] Tests: example tree → GEDCOM → familyx and → Gramps → familyx preserve people/links/facts;
       a hand-written GEDCOM with unsupported tags
 - [ ] Later: photos in export (OBJE / Gramps objects), sources/citations, GEDCOM 7
 
