@@ -60,7 +60,7 @@ pub struct App {
     pub(crate) toasts: Toasts,
     error_dialog: Option<String>,
     show_about: bool,
-    show_sources: bool,
+    pub(crate) sources_ui: crate::sources::SourcesUi,
 }
 
 #[derive(Clone)]
@@ -101,7 +101,7 @@ impl App {
             toasts: Toasts::default(),
             error_dialog: None,
             show_about: false,
-            show_sources: false,
+            sources_ui: crate::sources::SourcesUi::default(),
         };
         if let Some(path) = path {
             app.start_open(path);
@@ -606,8 +606,8 @@ impl App {
                 if ui.button("Fit tree to window").clicked() {
                     self.tree_view.fit_now();
                 }
-                if ui.button("Sources and repositories").clicked() {
-                    self.show_sources = true;
+                if ui.add_enabled(self.pkg.is_some(), egui::Button::new("Sources…")).clicked() {
+                    self.sources_ui.open = true;
                 }
                 ui.separator();
                 egui::widgets::global_theme_preference_buttons(ui);
@@ -820,42 +820,7 @@ impl App {
             });
         }
 
-        if self.show_sources {
-            let mut open = true;
-            egui::Window::new("Sources and repositories").open(&mut open).default_width(420.0).show(ctx, |ui| {
-                let Some(pkg) = &self.pkg else { return };
-                let mut any = false;
-                for (title, coll) in [("Sources", "SourceCollection"), ("Repositories", "RepositoryCollection")] {
-                    let items: Vec<_> = pkg.doc.root.child(coll).map(|c| c.elements().collect()).unwrap_or_default();
-                    if items.is_empty() {
-                        continue;
-                    }
-                    any = true;
-                    ui.heading(title);
-                    for item in items {
-                        egui::CollapsingHeader::new(
-                            item.child_text("Title")
-                                .or_else(|| item.child_text("Name"))
-                                .unwrap_or_else(|| item.name.clone()),
-                        )
-                        .id_salt(item.attr("Id").map(|s| s.into_owned()))
-                        .show(ui, |ui| {
-                            for field in item.elements().filter(|e| !e.text().trim().is_empty()) {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new(&field.name).strong());
-                                    ui.label(field.text());
-                                });
-                            }
-                        });
-                    }
-                }
-                if !any {
-                    ui.label("This tree has no sources or repositories.");
-                }
-                ui.weak("Sources are shown read-only; they are kept unchanged when you save.");
-            });
-            self.show_sources = open;
-        }
+        self.sources_window(ctx);
     }
 
     // ------------------------------------------------------------ import/export
