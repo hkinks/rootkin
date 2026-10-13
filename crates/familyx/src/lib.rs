@@ -9,6 +9,7 @@ pub mod codec;
 pub mod date;
 pub mod doc;
 pub mod edit;
+pub mod migrate;
 pub mod model;
 pub mod package;
 pub mod protection;

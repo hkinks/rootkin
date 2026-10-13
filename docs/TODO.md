@@ -6,7 +6,7 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 
 1. Verify in the Windows app that Linux-saved files open (see "Verify")
 2. Launch: Flathub/AUR packaging, announcements (plan kept locally, not in git)
-3. Older-format schema migration and source editing, once real sample files are available
+3. Remaining older-format leftovers (LDS facts, associations, ...) and source editing, once real sample files are available
 
 ## Publishing
 
@@ -72,10 +72,14 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
 ## Data / format
 - [x] Sources and repositories shown read-only (View → Sources); preserved on save
 - [ ] Edit sources/citations (needs real sample data for the schema)
-- [~] Older formats (`family7`, `family5`, `family4`, `family`, plain `content.xml`, family8/7 V1/V2): container
-      decryption done and verified against the app's own decrypt code (`Package::source_format()`, saved as family8 V3);
-      **schema migration is open** (old per-person `Relationships`, `Photos`, `Story`, ... are kept but not shown;
-      `Package::has_legacy_schema()`); needs real old files — see docs/design.md
+- [~] Older formats (`family7`, `family5`, `family4`, `family`, plain `content.xml`, family8/7 V1/V2): containers
+      decrypt (verified against the app's own decrypt code) and the old element schema is migrated on open
+      (`crate::migrate`, `Package::migration()`): relationships -> links with back-references, names, photos/files,
+      stories, contact address, old dates, GUID ids (docs/design.md, "Schema migration"). Derived from the decompiled
+      conversion code and verified against hand-written fictional fixtures only (running the vendor code was not possible).
+      Open: LDS facts, database-backed stories, godparent/sponsor/witness roles (-> associations), obsolete biology
+      fields (-> facts), `FactType`, citations/witnesses/addresses on facts, family crest, a few guessed element
+      names (see design.md); real old files would confirm all of it. `Package::has_legacy_schema()` flags the leftovers.
 - [x] "New family tree" in the UI (library: `Package::new` done)
 - [x] Understand `FamilyId` attribute: password hash record, UI lock only; new files now get the default-password hash (docs/design.md)
 - [x] Update `FileProperties/LastSavedDate` and `FamilyProperties/LastSavedPersonId` on save

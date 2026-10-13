@@ -59,14 +59,82 @@ checked by the Rust tests. What is *not* verified against real files: the exact 
 genuine old files (e.g. what the 32 leading bytes of `family5`/`family4` are for), and the
 packaging metadata of old versions.
 
-**Not done: schema migration.** Old versions serialized an older schema. The app reads it
-into the same `DataCollection` class and then converts (`FileConversions`): per-person
-`Relationships` become `ParentChildLink`/`SpouseLink`, `Name`/`AlternativeName` become
-name parts, `Photos`/`Attachments`/`AudioVideo` and root-level `PhotoCollection` etc. become
-`PackagedFile`s, `Story` becomes notes, `ContactAddress`/location fields become place
-details. This crate decrypts such files and keeps the XML verbatim, but does not convert it,
-so those trees can appear empty or partial (`Package::has_legacy_schema()` flags this).
-Implementing the conversion needs real samples. `FamilyId` is upgraded on import (below).
+## Schema migration (older element layouts)
+
+Older app versions serialized an older schema. The app reads it into the current `DataCollection` classes
+(the old members live on as `[Obsolete]` properties with their old XML names, never written back) and then runs
+`FileConversions`: a chain of ~45 conversions, each gated on `FileProperties/Version` (a schema number; 14.8 is
+current). `crate::migrate` performs the structural part of that chain on the XML when a tree is opened
+(`Package::from_bytes`; `Package::migration()` returns the `Report`) and sets `Version` to 14.8, because the
+app skips every conversion below the stored version - leaving the old number would make it run them again
+over converted data (e.g. overwrite `StartYear` from the missing `StartDate`). Trees already at 14.8 are not
+touched; unversioned trees are converted only if they contain old elements.
+
+**How this was derived and checked.** Read statically from the decompiled classes (`Person`, `Relationship` and
+subclasses, `CustomDate`, `Fact`, `Photo`, `Story`, `DataCollection`, ...) and `FileConversions`; the old element
+names are the `XmlElement`/`XmlArray` names on the `Obsolete*` properties. Running the vendor's conversion code
+on synthetic input was tried and failed: it needs the WPF assemblies, whose R2R/native parts do not load on
+Linux. So the fixtures (`tests/data/old/legacy_rel.xml`, `legacy_old.xml`, fictional) are hand-written after the
+classes and the expected results come from reading the conversion code, not from a differential run. Strings in
+the vendor assembly are encrypted, so enum/tag literals the conversions use were not all recoverable.
+
+Old layout (all per `Person` unless noted):
+
+| old element | meaning |
+|-------------|---------|
+| `Relationships/Relationship xsi:type=Spouse\|Child\|Parent\|SiblingRelationship` | per-person, mirrored list. `PersonId` = the relative, `RelationshipType`; `Child` = "PersonId is my child", `Parent` = "PersonId is my parent". Spouse: `SpouseRelationshipStatus` (or old `SpouseModifier`), `Marriage`, `Divorce` (`Fact`), `Facts`, `NumberOfChildren`, `Notes`, `Multimedia`; Child/Parent: `ParentChildModifier` (string) |
+| `Name`, `AlternativeName` | one `Name` each instead of `PersonNameCollection/Names` |
+| `Photos`, `Attachments`, `AudioVideo` (and root `PhotoCollection`, `AttachmentCollection`, `AudioVideoCollection`, `PackagedFilePropertiesCollection`) | files with `RelativePath`, `IsAvatar`; properties by file id |
+| `Story` | `RelativePath` of a story file, `GedcomImportStoryText`, or database ids (`FileId`, `AnnotationsFileId`) |
+| `ContactAddress` | `Address` with `ContactName/Line1-3/City/State/PostalCode/Country` |
+| `LDSFacts` | `Fact` subclasses with temple codes |
+| `Fact`: `Place`, `FactType`, `Address`, `Witnesses`, `Citation`, `Note` (string) | |
+| `CustomDate`: `StartDate`, `EndDate` (DateTime), `Descriptor`, `IsTextDate`, `IsDateRange`, `IsStartBC`, `IsEndBC`, `CalendarType` | |
+| root `Author` | single author |
+| 36-character GUID ids | before 2.1 |
+
+Mapping (what `migrate` does; version gate of the app's conversion in brackets):
+
+- **Relationships -> links** [< 11.3]: the lists are made symmetric first (a Spouse entry without mirror gets
+  one, `Child` without `Parent` on the other side and vice versa). Then one `SpouseLink` per unordered pair
+  (person 1 = the person listed first in file order, status from rel 1, `Facts` = its `Facts` + `Marriage` +
+  `Divorce` [< 2.4, each with `IsFamily`; empty placeholders skipped] + `NumberOfChildren` as an `NCHI` fact,
+  `Notes`/`Multimedia` of both sides without duplicates) and one `ParentChildLink` per `Child` entry (parent =
+  owner, `ParentChildModifier` from the `Child` entry, Natural omitted), appended spouses first, in person order.
+  The `FamilySpouseLinks`/`FamilyChildLinks` back-references come from the editor's own `link_spouse`/`link_parent`.
+  `Sibling` entries are dropped (derived data). Entries whose relative does not exist, and parent entries with a
+  modifier the current app does not have (the app turns old godparent/sponsor/witness roles into *associations*,
+  not implemented) stay in a trimmed `Relationships` list and are reported as warnings.
+- **Names** [< 1.4]: `Name` becomes the primary entry of `PersonNameCollection/Names`, `AlternativeName` a
+  non-primary one; `Note` strings become `Notes` [string note conversion].
+- **Media** [< 5.0]: every distinct `RelativePath` (root collections first, then per person) becomes a
+  `PackagedFile` with a fresh id, `Type` Photo/Attachment/AudioVideo, `MultimediaType` from the old `MediaType`
+  string, properties from `PackagedFilePropertiesCollection` by old id; person `Multimedia` gets the ids,
+  `IsAvatar` sets `PrimaryImageId`. `RelativePath` is resolved against the package parts (as is, under
+  `Multimedia/`, by file name).
+- **Story**: `GedcomImportStoryText` and a story file found in the package become story notes
+  (`IsStoryNote` true; `text/richtext` for `.rtf`). Database-backed stories (`FileId`) are not converted and stay.
+- **Facts**: `Place` -> `PlaceDetails/Description`; `ContactAddress` -> a `FACT_ContactAddress` fact with the
+  address lines (newline separated) as place.
+- **Dates**: `StartDate`/`EndDate` -> `Start*`/`End*` (time of day -> `StartTime`/`EndTime`); `IsTextDate` ->
+  `TextOnly`, `IsDateRange` -> `Range` (`FromOnly`/`ToOnly` if one end is missing), else `Descriptor` parsed
+  case-insensitively; BC flags -> `StartEra`/`EndEra` 0; non-Gregorian `CalendarType` -> `StartCalendar`/`EndCalendar`.
+  `0001-01-01` (DateTime.MinValue) counts as unset.
+- **Ids** [< 2.1]: 36-character GUIDs become 22-character base64url of `Guid.ToByteArray()`, everywhere they are
+  referenced.
+- **Author**: root `Author` moves into `AuthorCollection`.
+
+Guesses that could not be confirmed against the vendor code (encrypted literals): the `NCHI` tag and
+`NumberDetails` element of the number-of-children fact, element names `StartEra`/`StartCalendar` (and their
+position), and `text/richtext` for `.rtf` stories.
+
+**Not migrated (kept verbatim, `Package::has_legacy_schema()` stays true):** `LDSFacts` (LDS fact types ->
+tags/temples), database-backed stories, godparent/sponsor/witness roles, obsolete `Biology` fields (hair/eye
+colour, blood group, haplogroups -> facts), `FactType`, fact `Address`/`Witnesses`/`Citation`, name `Citation`,
+`FamilyProperties/FamilyCrest` and `Description`, address/repository/source/task obsolete members, per-file
+`Tags`, calendar month adjustments (French/Icelandic), `AncestralFileNumber`/`RecordFileNumber`/`CustomId`.
+Because `Version` is bumped, the Windows app will not convert these either once the file was saved by Rootkin.
+`FamilyId` is upgraded on import (below).
 
 ## FamilyId (tree password record)
 
