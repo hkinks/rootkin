@@ -8,6 +8,8 @@ mod recent;
 mod relation_dialog;
 mod toasts;
 mod tree_view;
+#[cfg(test)]
+mod ui_tests;
 
 use eframe::egui;
 

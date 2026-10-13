@@ -1,7 +1,8 @@
 //! Zoomable family tree canvas drawn from [`crate::layout`].
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, TextureId, Vec2,
+    self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, TextureId,
+    Vec2,
 };
 use familyx::model::{Gender, Id, Person, Tree};
 
@@ -303,6 +304,12 @@ impl TreeView {
                     if ui.button(" − ").on_hover_text("Zoom out").clicked() {
                         self.zoom_by(0.8, canvas.center(), canvas);
                     }
+                    ui.label(RichText::new(" ? ").strong()).on_hover_text(
+                        "Click a person to show their family\n\
+                         Drag the background to move, scroll to zoom\n\
+                         Arrow keys: up = parent, down = child, left/right = siblings and partners\n\
+                         Alt+Left / Alt+Right: back / forward",
+                    );
                 });
             });
         });
@@ -324,9 +331,6 @@ impl TreeView {
                 gens(ui, "Descendants", &mut s.descendants);
                 gens(ui, "Ancestors", &mut s.ancestors);
                 self.settings = s;
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.weak("Click a person to show their family · drag to move · scroll to zoom · arrow keys move between relatives");
-                });
             });
         });
         action
