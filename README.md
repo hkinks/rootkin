@@ -4,8 +4,7 @@ A free, cross-platform family tree editor written in Rust. It opens, edits and
 saves `.familyx` files (the format used by Chronoplex *My Family Tree*), so a
 tree can be maintained on Linux and still be opened by the Windows program.
 
-Not affiliated with or endorsed by Chronoplex Software. The file format was
-reverse-engineered solely for interoperability; see [docs/design.md](docs/design.md).
+Rootkin is an independent project and is not affiliated with Chronoplex Software.
 
 ![Rootkin showing the fictional example tree](docs/screenshot.png)
 

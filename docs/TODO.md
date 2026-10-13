@@ -5,7 +5,7 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 ## Next steps
 
 1. Publish on GitHub (see "Publishing" below)
-2. GEDCOM + Gramps import/export (design below, awaiting go-ahead)
+2. Import/export: support as many genealogy formats as possible, starting with GEDCOM and Gramps
 3. UX review top 5: reliable commit/save state, welcome screen, labelled relationship
    buttons, simpler tree interaction, free-text dates
 4. Verify Linux-saved files open in the Windows app
@@ -25,6 +25,8 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 - [ ] Verify CI and release workflows on GitHub after the first push
 
 ## Import/export formats
+
+Goal: import (and where sensible export) as many genealogy formats as possible.
 
 Planned crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-specific.
 
