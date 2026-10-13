@@ -43,9 +43,12 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
 - [ ] Sources/citations in import/export (needs the app's source schema from real samples)
 
 ## Verify
-- [ ] Open a re-encrypted, unmodified file in the Windows app
-- [ ] Open the generated example (`rootkin-cli example`) in the Windows app (new-file skeleton, default-password `FamilyId`)
-- [ ] Open a file edited + saved by the Linux editor in the Windows app
+- [x] Re-encrypted unmodified file, a newly created file, a GEDCOM-imported file and an edited file
+      all load with the Windows app's own code (run on Linux via a .NET harness): OPC open,
+      decrypt + HMAC + inflate, password check (unprotected), full `DataCollection` deserialization;
+      the app's re-save reads back in Rootkin unchanged. Differences in Rootkin's XML are cosmetic
+      (`IsPrimary` now limited to BIRT/DEAT/MARR/OCCU like the app).
+- [ ] Visual check in the Windows app's UI (rendering of dates/photos/charts) — needs a Windows machine
 
 ## Editing
 - [x] Notes: view/edit person notes and fact notes (`Notes/Notes/Note`, text/html/rtf formats)

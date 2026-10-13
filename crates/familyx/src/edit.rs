@@ -330,12 +330,19 @@ fn fact_mut<'a>(doc: &'a mut Document, fact_id: &str) -> EditResult<&'a mut Elem
     find(doc.root.child_mut(owner).expect("found above"), fact_id).ok_or_else(|| EditError::NoFact(fact_id.to_string()))
 }
 
+/// Whether the app marks the first fact with this tag `IsPrimary` (in files
+/// it writes, only these tags carry the flag).
+fn takes_primary(tag: &str) -> bool {
+    matches!(tag, "BIRT" | "DEAT" | "MARR" | "OCCU") || tag.starts_with("MARR_")
+}
+
 /// Add a fact (e.g. `BIRT`) to a person; returns its id.
 pub fn add_fact(doc: &mut Document, person_id: &str, tag: &str, input: &FactInput) -> EditResult<Id> {
     let person = person_mut(doc, person_id)?;
-    let is_first = !person
-        .child("Facts")
-        .is_some_and(|f| f.children_named("Fact").any(|f| f.child_text("Tag").as_deref() == Some(tag)));
+    let is_first = takes_primary(tag)
+        && !person
+            .child("Facts")
+            .is_some_and(|f| f.children_named("Fact").any(|f| f.child_text("Tag").as_deref() == Some(tag)));
     let mut fact = record("Fact");
     let id = fact.attr("Id").unwrap_or_default().into_owned();
     fact.push(text_el("Tag", tag));
@@ -355,7 +362,8 @@ pub fn add_couple_fact(doc: &mut Document, link_id: &str, tag: &str, input: &Fac
         .find(|l| l.attr("Id").as_deref() == Some(link_id) && l.attr("xsi:type").as_deref() == Some("SpouseLink"))
         .ok_or(EditError::Invalid("no such couple"))?;
     let facts = link.ensure_child("Facts", &["Facts", "SpouseRelationshipStatus", "NumberOfChildren"]);
-    let is_first = !facts.children_named("Fact").any(|f| f.child_text("Tag").as_deref() == Some(tag));
+    let is_first =
+        takes_primary(tag) && !facts.children_named("Fact").any(|f| f.child_text("Tag").as_deref() == Some(tag));
     let mut fact = record("Fact");
     let id = fact.attr("Id").unwrap_or_default().into_owned();
     fact.push(text_el("Tag", tag));
