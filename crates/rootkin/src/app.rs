@@ -59,6 +59,8 @@ pub struct App {
     recent: Vec<PathBuf>,
     pub(crate) toasts: Toasts,
     error_dialog: Option<String>,
+    /// An informational message shown in a dialog (e.g. after converting an old file).
+    notice: Option<String>,
     show_about: bool,
     show_sources: bool,
 }
@@ -100,6 +102,7 @@ impl App {
             recent: crate::recent::load(),
             toasts: Toasts::default(),
             error_dialog: None,
+            notice: None,
             show_about: false,
             show_sources: false,
         };
@@ -147,7 +150,10 @@ impl App {
         while let Ok(job) = self.jobs.1.try_recv() {
             self.busy = None;
             match job {
-                Job::Opened(path, Ok(pkg)) => self.load(pkg, Some(path)),
+                Job::Opened(path, Ok(pkg)) => {
+                    self.notice = migration_notice(&pkg);
+                    self.load(pkg, Some(path));
+                }
                 Job::Opened(path, Err(e)) => {
                     self.error_dialog = Some(format!("Could not open {}:\n\n{e}", path.display()));
                 }
@@ -805,6 +811,17 @@ impl App {
             });
         }
 
+        if let Some(msg) = self.notice.clone() {
+            egui::Modal::new(egui::Id::new("notice")).show(ctx, |ui| {
+                ui.set_max_width(480.0);
+                ui.heading("Older file converted");
+                ui.label(msg);
+                if ui.button("OK").clicked() {
+                    self.notice = None;
+                }
+            });
+        }
+
         if self.show_about {
             egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
                 ui.heading("Rootkin");
@@ -899,6 +916,27 @@ impl App {
             Err(e) => self.toasts.error(format!("Export failed: {e}")),
         }
     }
+}
+
+/// What to tell the user about a file converted from an older app version.
+fn migration_notice(pkg: &Package) -> Option<String> {
+    let report = pkg.migration()?;
+    let mut msg = format!(
+        "This file was made by an older version of My Family Tree (format {}). Rootkin converted it \
+         to the current format: {} relationships and {} photos were carried over.\n\n\
+         Saving writes the current format; your original file is kept next to it as .bak.",
+        if report.from_version.is_empty() { "unknown" } else { &report.from_version },
+        report.spouse_links + report.parent_links,
+        report.media,
+    );
+    if !report.warnings.is_empty() {
+        msg.push_str(&format!(
+            "\n\nSome old details could not be converted and are kept unchanged in the file, but \
+             won't be shown: {}.\nConsider using \"Save as\" to keep the original untouched.",
+            report.warnings.join("; ")
+        ));
+    }
+    Some(msg)
 }
 
 pub(crate) fn file_name(path: &Path) -> String {
