@@ -37,10 +37,38 @@ that opens, edits and saves `.familyx` files which the Windows app can still ope
 - `crates/familyx` — `codec` (crypto), `doc` (lossless XML tree, byte-exact round-trip),
   `package` (OPC zip, atomic save + `.bak`), `model` (read-only `Tree` snapshot rebuilt
   after each edit), edits mutate the `doc` directly so unknown data survives.
-- `crates/rootkin-cli` — `dump`, `pack`, `roundtrip`, `summary`, `check`, `example`.
+- `crates/rootkin-cli` — `dump`, `pack`, `roundtrip`, `summary`, `check`, `example`, `import`, `export`.
+- `crates/rootkin-formats` — GEDCOM and Gramps XML import/export (see below).
 - `crates/rootkin` — egui app: people list, tree canvas, person panel.
 
 New elements must follow XmlSerializer child order (see `ensure_child`).
+
+## Import/export formats (`rootkin-formats`)
+
+API: `import(bytes, Format) -> (Package, ImportReport)`, `export(&Package, Format) -> Vec<u8>`,
+plus `import_path` / `export_path`; `Format::{Gedcom, Gramps}` detected by content, then extension.
+Imports only use the `familyx` edit API (so the result is a valid `.familyx`); exports read the
+`Tree` snapshot. `ImportReport.warnings` lists every dropped or approximated item (`dropped 2x INDI.SOUR`).
+
+Mapping (GEDCOM 5.5.1 UTF-8 / Gramps XML 1.7.1):
+
+- Names: primary + alternates (`NAME` with `TYPE` / `<name alt="1" type>`); prefix, suffix, nickname
+  are written but dropped on import (the edit API has no setter yet; prefix is folded into the surname).
+- Dates map onto the app's `DateDescriptor` (ABT/EST/CAL, BEF/AFT, BET..AND = Range, FROM..TO = Span,
+  FROM/TO only, free text = TextOnly). Non-Gregorian calendars become text. Gramps has no open-ended
+  spans: those are written as `datestr`.
+- Attribute-like facts (`OCCU`, `EDUC`, `RESI`, ...) keep their text as the GEDCOM value; events keep
+  it as `NOTE`. Tags GEDCOM does not know are written as `EVEN` + `TYPE`. In Gramps, details are the
+  event description and unknown types are custom event types (read back as `EVEN`).
+- Families: one `FAM` / `<family>` per couple, HUSB/WIFE (father/mother) by gender, plus synthetic
+  families for single parents and unmarried pairs so every child is attached. `PEDI adopted/foster/sealing`
+  and Gramps `frel`/`mrel` map to the parent-link modifier (GEDCOM: per family, not per parent).
+- Places are flat strings: written as one `PLAC` / one flat `placeobj`; a Gramps hierarchy is joined
+  with commas on import.
+- Living flag: neither format has it; import guesses (no death data and born < 110 years ago).
+- Not carried: photos/media, sources and citations, person notes, addresses, couple status, event
+  roles other than primary, Gramps tags/attributes/repositories, `_CUSTOM` tags, ANSEL encoding.
+  Unsupported couple facts without two spouses are dropped (reported).
 
 ## Dev
 
