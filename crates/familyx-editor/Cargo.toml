@@ -1,0 +1,12 @@
+[package]
+name = "familyx-editor"
+description = "Family tree editor for .familyx files"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+familyx = { path = "../familyx" }
+eframe = "0.36"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rfd = "0.17"

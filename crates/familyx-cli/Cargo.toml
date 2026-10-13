@@ -1,0 +1,13 @@
+[package]
+name = "familyx-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "familyx"
+path = "src/main.rs"
+
+[dependencies]
+familyx = { path = "../familyx" }
+anyhow = "1"

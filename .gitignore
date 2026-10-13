@@ -1,0 +1,7 @@
+/target
+
+# family data contains personal information: never commit it
+*.familyx
+*.familyx.tmp
+*.bak
+*.xml

@@ -1,0 +1,23 @@
+[package]
+name = "familyx"
+description = "Read and write Chronoplex My Family Tree .familyx files"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+hmac = "0.12"
+sha2 = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+flate2 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
+rand = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+thiserror = "2"
+
+[dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
