@@ -1,27 +1,55 @@
-# Familyx .familyx test fixture
+# familyx
 
-Files:
+A free, cross-platform family tree editor written in Rust. It opens, edits and
+saves `.familyx` files (the format used by Chronoplex *My Family Tree*), so a
+tree can be maintained on Linux and still be opened by the Windows program.
 
-- `db.familyx` -- original Familyx export (Chronoplex Software), copied from the vault. Do not publish.
-- `db.obfuscated.familyx` -- test fixture: same container, obfuscated media.
+Not affiliated with or endorsed by Chronoplex Software. The file format was
+reverse-engineered solely for interoperability; see [docs/design.md](docs/design.md).
 
-## Container format
+## Features
 
-`.familyx` is an OPC package (zip, same convention as .docx):
+- Read and write `.familyx` (v3 `family8` part) losslessly: anything the editor
+  does not understand is preserved byte-for-byte
+- People list with search, zoomable ancestor/descendant tree, photos
+- Edit names, gender, living status, events (birth, death, marriage, …)
+- Add and link parents, spouses and children; delete people; undo/redo
+- Atomic saves with a `.bak` copy of the previous version
 
-| Part | Content |
-|---|---|
-| `[Content_Types].xml` | Declares `family8` as `application/vnd.chronoplexsoftware.familyx`, plus png/jpg/rels defaults |
-| `_rels/.rels` | Relationship `MyFamilyTree/Relationship` from the package root to `/family8` and to every `/Multimedia/<id>.png\|jpg` |
-| `family8` | 91,504 bytes. Single uniformly high-entropy blob (7.95 bits/byte, no zlib/gzip/bz2/lzma/zstd/snappy/lz4 magic). Compressed or encrypted with an undocumented vendor codec. Tree data (names, dates, relationships) lives here, opaque. |
-| `Multimedia/*` | 48 photos, random-hash file names, no personal data in names |
+## Build and run
 
-## Obfuscation applied to the fixture
+With Nix:
 
-- All 48 photos: `-auto-orient -strip -resize 8% -filter Box -resize 1250% -blur 0x4` (ImageMagick). Heavy pixelation, faces not recognizable, valid images, metadata stripped.
-- Zip entry timestamps normalized to 2021-01-01; parts re-packed as STORED.
-- `[Content_Types].xml`, `_rels/.rels`, `family8`: byte-identical to the original.
+```sh
+nix-shell
+cargo run --release -p familyx-editor -- path/to/tree.familyx
+```
 
-## Caveat
+Elsewhere you need a Rust toolchain plus the usual eframe/wgpu runtime libraries
+(Vulkan or OpenGL, Wayland or X11).
 
-Because the `family8` codec is unknown, the tree text (names, dates) is still recoverable in principle from the opaque blob. Photos -- the clearest personal data -- are gone. If the codec gets cracked during the parser work, re-derive the fixture: decode `family8`, substitute names/dates, re-encode, re-pack.
+Command-line tool:
+
+```sh
+cargo run -p familyx-cli -- summary tree.familyx     # list people
+cargo run -p familyx-cli -- dump tree.familyx out.xml  # decoded XML
+cargo run -p familyx-cli -- example new.familyx      # fictional sample tree
+```
+
+## Layout
+
+- `crates/familyx` — format library (codec, lossless XML, model, edits)
+- `crates/familyx-cli` — debugging tool
+- `crates/familyx-editor` — the egui desktop app
+- `docs/` — design notes, TODO, UX review
+
+## Privacy
+
+Family trees contain personal data. `.gitignore` excludes `*.familyx`, decoded
+XML and backups; the only committed tree is the fictional
+`crates/familyx/tests/data/example.familyx`.
+
+## License
+
+Released into the public domain under the [Unlicense](UNLICENSE), or, at your
+option, the [MIT license](LICENSE-MIT).

@@ -1,21 +1,24 @@
 # TODO
 
+See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities.
+
 ## Verify
-- [ ] Open `roundtrip-test.familyx` (re-encrypted, unmodified) in the Windows app
+- [ ] Open a re-encrypted, unmodified file in the Windows app
+- [ ] Open the generated example (`familyx example`) in the Windows app (new-file skeleton, random `FamilyId`)
 - [ ] Open a file edited + saved by the Linux editor in the Windows app
 
 ## Editing
 - [ ] Notes: view/edit person notes and fact notes (`Notes/Notes/Note`, text/html/rtf formats)
 - [ ] Edit couple facts other than marriage (residence, divorce, …) and couple status (`SpouseRelationshipStatus`)
-- [ ] Alternative names: add/edit/remove non-primary names, name type
-- [ ] Parent-child modifier (adopted, step, foster)
-- [ ] Set home person
+- [ ] Alternative names in the UI (library: `add_alternate_name` done)
+- [ ] Parent-child modifier in the UI (library: `set_parent_modifier` done)
+- [ ] Set home person in the UI (library: `set_home_person` done)
 - [ ] Custom fact tags (`CustomFactTag`)
 - [ ] Reorder children / spouses
 
 ## Media
 - [ ] Gallery of all photos per person
-- [ ] Add photo (write `Multimedia/<id>.ext`, `PackagedFile`, `_rels/.rels`, `[Content_Types].xml`)
+- [ ] Add photo in the UI (library: `Package::add_photo` done, png/jpg)
 - [ ] Set primary photo, remove photo
 - [ ] Face crop (`Face` element) for thumbnails in tree boxes
 
@@ -30,7 +33,7 @@
 - [ ] Sources, repositories, citations (currently preserved but not shown)
 - [ ] Older formats (`family7`, `family5`, `family4`, `family`) — read-only import
 - [ ] GEDCOM import/export
-- [ ] New empty file (needs a valid minimal `Family` document + `FamilyId`)
+- [ ] "New family tree" in the UI (library: `Package::new` done)
 - [ ] Understand `FamilyId` attribute (looks like a password-hash record: `SHA512\0210000\0salt\0hash`) — password-protected trees?
 - [ ] Update `FileProperties/LastSavedDate` and `FamilyProperties/LastSavedPersonId` on save
 

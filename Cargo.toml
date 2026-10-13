@@ -5,7 +5,7 @@ members = ["crates/familyx", "crates/familyx-cli", "crates/familyx-editor"]
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
-license = "MIT"
+license = "Unlicense OR MIT"
 
 # PBKDF2 with 210k iterations is painfully slow unoptimized
 [profile.dev.package."*"]
