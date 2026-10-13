@@ -196,7 +196,7 @@ pub fn build() -> Result<Package> {
         b.doc,
         &SourceInput {
             title: "Lindqvist family Bible".into(),
-            note: "Births and deaths entered by hand on the flyleaf.".into(),
+            note: Some("Births and deaths entered by hand on the flyleaf.".into()),
             ..Default::default()
         },
     )?;

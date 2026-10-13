@@ -600,11 +600,8 @@ impl Importer<'_> {
                     other => self.dropped.add(format!("source.{other}")),
                 }
             }
-            input.note = note_texts.into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join(
-                "
-
-",
-            );
+            let note = note_texts.into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join("\n\n");
+            input.note = Some(note).filter(|n| !n.is_empty());
             let id = edit::add_source(&mut self.pkg.doc, &input)?;
             self.sources.insert(key(&s.attr("handle").unwrap_or_default()), id);
         }

@@ -346,6 +346,17 @@ impl Tree {
         self.sources.iter().find(|s| s.id == id)
     }
 
+    /// How many citations (on people, events and couples) refer to this source.
+    pub fn citation_count(&self, source: &str) -> usize {
+        let count = |c: &[Citation]| c.iter().filter(|c| c.source == source).count();
+        let couple_facts = self.spouse_links.iter().flat_map(|l| &l.facts);
+        self.people
+            .iter()
+            .map(|p| count(&p.citations) + p.facts.iter().map(|f| count(&f.citations)).sum::<usize>())
+            .sum::<usize>()
+            + couple_facts.map(|f| count(&f.citations)).sum::<usize>()
+    }
+
     pub fn repository(&self, id: &str) -> Option<&Repository> {
         self.repositories.iter().find(|r| r.id == id)
     }

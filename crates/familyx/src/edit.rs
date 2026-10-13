@@ -893,8 +893,8 @@ pub struct SourceInput {
     pub abbreviation: String,
     pub author: String,
     pub publisher: String,
-    /// Plain-text note on the source.
-    pub note: String,
+    /// Plain-text note on the source; `None` leaves the existing notes untouched.
+    pub note: Option<String>,
     pub repository: Option<Id>,
     pub call_number: String,
 }
@@ -925,7 +925,9 @@ fn write_source_fields(doc: &mut Document, id: &str, input: &SourceInput) -> Edi
     ] {
         set_child_text(source, name, value, SOURCE_ORDER);
     }
-    write_note(source, SOURCE_ORDER, &input.note);
+    if let Some(note) = &input.note {
+        write_note(source, SOURCE_ORDER, note);
+    }
     // `Repositories` has no ShouldSerialize in the app: always present
     let list = source.ensure_child("Repositories", SOURCE_ORDER);
     match &input.repository {

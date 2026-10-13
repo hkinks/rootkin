@@ -624,11 +624,8 @@ impl Importer<'_> {
                     t => self.dropped.add(format!("SOUR.{t}")),
                 }
             }
-            input.note = notes.into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join(
-                "
-
-",
-            );
+            let note = notes.into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join("\n\n");
+            input.note = Some(note).filter(|n| !n.is_empty());
             self.sources.insert(x.clone(), edit::add_source(&mut self.pkg.doc, &input)?);
         }
         Ok(())

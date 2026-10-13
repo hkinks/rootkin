@@ -258,7 +258,7 @@ fn sources_and_citations_roundtrip_with_schema_order() {
             title: "Parish register <1890>".into(),
             author: "Parish clerk".into(),
             publisher: "Printed 1891".into(),
-            note: "Water damaged".into(),
+            note: Some("Water damaged".into()),
             repository: Some(repo.clone()),
             call_number: "KA 12/3".into(),
             ..Default::default()
