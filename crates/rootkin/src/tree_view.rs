@@ -1,268 +1,340 @@
-//! Zoomable pedigree canvas: ancestors above, focus person (+ spouses) in the
-//! middle, descendants below.
+//! Zoomable family tree canvas drawn from [`crate::layout`].
 
-use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
-use familyx::model::{Gender, Id, Tree};
+use eframe::egui::{
+    self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, TextureId, Vec2,
+};
+use familyx::model::{Gender, Id, Person, Tree};
 
-const BOX: Vec2 = Vec2::new(170.0, 54.0);
-const H_GAP: f32 = 18.0;
-const V_GAP: f32 = 46.0;
-const ANCESTOR_GENERATIONS: u32 = 3;
-const DESCENDANT_GENERATIONS: u32 = 2;
+use crate::layout::{self, EdgeKind, Layout, Role, Settings, BOX};
 
 pub struct TreeView {
     pan: Vec2,
     zoom: f32,
+    /// Animation targets for `pan`/`zoom`.
+    target: Option<(Vec2, f32)>,
     last_focus: Option<Id>,
-    /// Fit every frame (follows window resizes) until the user pans or zooms.
+    /// Keep fitting (e.g. on window resize) until the user pans or zooms.
     auto_fit: bool,
+    pub settings: Settings,
+    /// Screen rectangle of the canvas in the last frame (for image export).
+    pub canvas: Rect,
 }
 
 impl Default for TreeView {
     fn default() -> Self {
-        TreeView { pan: Vec2::ZERO, zoom: 1.0, last_focus: None, auto_fit: true }
+        TreeView {
+            pan: Vec2::ZERO,
+            zoom: 1.0,
+            target: None,
+            last_focus: None,
+            auto_fit: true,
+            settings: Settings::default(),
+            canvas: Rect::NOTHING,
+        }
     }
 }
 
 pub enum TreeAction {
-    Select(Id),
+    /// Select the person and centre the tree on them.
     Focus(Id),
+    Back,
+    Forward,
 }
 
-struct Layout {
-    boxes: Vec<(Id, Pos2)>,
-    /// Parent box centre-bottom → child box centre-top, in layout coordinates.
-    edges: Vec<(Pos2, Pos2)>,
-    /// Spouse connectors.
-    marriages: Vec<(Pos2, Pos2)>,
+/// A photo for a person: texture and the UV rectangle to show (face crop).
+pub type PhotoFn<'a> = dyn FnMut(&Person) -> Option<(TextureId, Rect)> + 'a;
+
+pub struct NavState {
+    pub can_back: bool,
+    pub can_forward: bool,
+}
+
+fn gender_fill(g: Gender) -> Color32 {
+    match g {
+        Gender::Male => Color32::from_rgb(0x2f, 0x5d, 0x8a),
+        Gender::Female => Color32::from_rgb(0x8a, 0x3f, 0x5d),
+        Gender::Other => Color32::from_rgb(0x5d, 0x6e, 0x3f),
+        Gender::Unknown => Color32::from_rgb(0x55, 0x55, 0x55),
+    }
+}
+
+pub fn gender_symbol(g: Gender) -> &'static str {
+    match g {
+        Gender::Male => "♂",
+        Gender::Female => "♀",
+        Gender::Other => "⚥",
+        Gender::Unknown => "?",
+    }
 }
 
 impl TreeView {
-    pub fn ui(&mut self, ui: &mut egui::Ui, tree: &Tree, focus: &str, selected: Option<&str>) -> Option<TreeAction> {
+    pub fn fit_now(&mut self) {
+        self.auto_fit = true;
+    }
+
+    fn zoom_by(&mut self, factor: f32, around: Pos2, canvas: Rect) {
+        let origin = canvas.center() + self.pan;
+        let new_zoom = (self.zoom * factor).clamp(0.2, 3.0);
+        self.pan += (around - origin) * (1.0 - new_zoom / self.zoom);
+        self.zoom = new_zoom;
+        self.auto_fit = false;
+        self.target = None;
+    }
+
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        tree: &Tree,
+        focus: &str,
+        nav: NavState,
+        photo: &mut PhotoFn,
+    ) -> Option<TreeAction> {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let canvas = response.rect;
-        let layout = layout(tree, focus);
+        self.canvas = canvas;
+        let layout = layout::layout(tree, focus, self.settings);
         if self.last_focus.as_deref() != Some(focus) {
             self.auto_fit = true;
             self.last_focus = Some(focus.to_string());
         }
         if self.auto_fit {
-            self.fit(&layout, canvas);
+            self.target = Some(fit(&layout, canvas));
         }
+        self.animate(ui.ctx());
 
         if response.dragged() && response.drag_delta() != Vec2::ZERO {
             self.pan += response.drag_delta();
             self.auto_fit = false;
+            self.target = None;
         }
         if response.hovered() {
             let (zoom_delta, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
             let factor = zoom_delta * (scroll.y / 400.0).exp();
             if factor != 1.0 {
-                // zoom around the pointer
                 if let Some(pointer) = response.hover_pos() {
-                    let origin = canvas.center() + self.pan;
-                    let new_zoom = (self.zoom * factor).clamp(0.25, 3.0);
-                    let applied = new_zoom / self.zoom;
-                    self.pan += (pointer - origin) * (1.0 - applied);
-                    self.zoom = new_zoom;
-                    self.auto_fit = false;
+                    self.zoom_by(factor, pointer, canvas);
+                }
+            }
+        }
+        if response.double_clicked() {
+            self.auto_fit = true;
+        }
+
+        let mut action = self.draw(ui, &painter, &layout, tree, focus, photo);
+        action = action.or(self.controls(ui, canvas, tree, focus, &nav));
+        action
+    }
+
+    /// Ease `pan`/`zoom` towards the target.
+    fn animate(&mut self, ctx: &egui::Context) {
+        let Some((pan, zoom)) = self.target else { return };
+        let t = 0.25;
+        self.pan += (pan - self.pan) * t;
+        self.zoom += (zoom - self.zoom) * t;
+        if (pan - self.pan).length() < 0.5 && (zoom - self.zoom).abs() < 0.002 {
+            self.pan = pan;
+            self.zoom = zoom;
+            if !self.auto_fit {
+                self.target = None;
+            }
+        } else {
+            ctx.request_repaint();
+        }
+    }
+
+    fn draw(
+        &self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        layout: &Layout,
+        tree: &Tree,
+        focus: &str,
+        photo: &mut PhotoFn,
+    ) -> Option<TreeAction> {
+        let canvas = self.canvas;
+        let origin = canvas.center() + self.pan;
+        let to_screen = |p: Pos2| origin + p.to_vec2() * self.zoom;
+        let line_color = ui.visuals().text_color().gamma_multiply(0.55);
+        let line = Stroke::new((1.5 * self.zoom).max(1.0), line_color);
+
+        for edge in &layout.edges {
+            let (a, b) = (to_screen(edge.from), to_screen(edge.to));
+            match edge.kind {
+                EdgeKind::Couple => {
+                    painter.line_segment([a, b], Stroke::new(line.width * 1.6, line_color));
+                }
+                EdgeKind::Child { adopted } => {
+                    let mid_y = b.y - (b.y - a.y).abs().min(50.0 * self.zoom) / 2.0;
+                    let points = [a, Pos2::new(a.x, mid_y), Pos2::new(b.x, mid_y), b];
+                    if adopted {
+                        for w in points.windows(2) {
+                            painter.extend(Shape::dashed_line(&[w[0], w[1]], line, 6.0 * self.zoom, 4.0 * self.zoom));
+                        }
+                    } else {
+                        painter.add(Shape::line(points.to_vec(), line));
+                    }
                 }
             }
         }
 
-        let origin = canvas.center() + self.pan;
-        let to_screen = |p: Pos2| origin + p.to_vec2() * self.zoom;
-        let line = Stroke::new(1.5 * self.zoom.max(0.5), ui.visuals().weak_text_color());
-
-        for (from, to) in &layout.edges {
-            let (a, b) = (to_screen(*from), to_screen(*to));
-            let mid_y = (a.y + b.y) / 2.0;
-            painter.line_segment([a, Pos2::new(a.x, mid_y)], line);
-            painter.line_segment([Pos2::new(a.x, mid_y), Pos2::new(b.x, mid_y)], line);
-            painter.line_segment([Pos2::new(b.x, mid_y), b], line);
-        }
-        for (a, b) in &layout.marriages {
-            painter.line_segment([to_screen(*a), to_screen(*b)], Stroke::new(line.width * 1.5, line.color));
-        }
-
         let mut action = None;
-        let pointer = response.hover_pos();
-        for (id, centre) in &layout.boxes {
-            let Some(person) = tree.person(id) else { continue };
-            let rect = Rect::from_center_size(to_screen(*centre), BOX * self.zoom);
+        for node in &layout.nodes {
+            let Some(person) = tree.person(&node.id) else { continue };
+            let rect = Rect::from_center_size(to_screen(node.pos), BOX * self.zoom);
             if !rect.intersects(canvas) {
                 continue;
             }
-            let hovered = pointer.is_some_and(|p| rect.contains(p));
-            let fill = match person.gender {
-                Gender::Male => Color32::from_rgb(0x2f, 0x5d, 0x8a),
-                Gender::Female => Color32::from_rgb(0x8a, 0x3f, 0x5d),
-                Gender::Unknown => Color32::from_rgb(0x55, 0x55, 0x55),
-            };
-            let fill = if hovered { fill.gamma_multiply(1.25) } else { fill };
-            let stroke = if Some(id.as_str()) == selected {
-                Stroke::new(3.0, Color32::from_rgb(0xf0, 0xc0, 0x40))
-            } else if id == focus {
-                Stroke::new(2.0, Color32::WHITE)
-            } else {
-                Stroke::new(1.0, Color32::from_gray(30))
-            };
-            let radius = CornerRadius::same((6.0 * self.zoom).round() as u8);
-            painter.rect(rect, radius, fill, stroke, StrokeKind::Inside);
-
-            let font = |size: f32| FontId::proportional(size * self.zoom);
-            let clip = painter.with_clip_rect(rect.shrink(4.0 * self.zoom));
-            clip.text(
-                rect.center() - Vec2::new(0.0, 8.0 * self.zoom),
-                Align2::CENTER_CENTER,
-                person.display_name(),
-                font(14.0),
-                Color32::WHITE,
-            );
-            clip.text(
-                rect.center() + Vec2::new(0.0, 12.0 * self.zoom),
-                Align2::CENTER_CENTER,
-                person.lifespan(),
-                font(12.0),
-                Color32::from_gray(220),
-            );
-
-            if hovered && response.double_clicked() {
-                action = Some(TreeAction::Focus(id.clone()));
-            } else if hovered && response.clicked() {
-                action = Some(TreeAction::Select(id.clone()));
+            let label = format!("{} {}", person.display_name(), person.lifespan());
+            let response = ui
+                .interact(
+                    rect,
+                    ui.id().with(("person", &node.id, node.pos.x as i32, node.pos.y as i32)),
+                    Sense::click(),
+                )
+                .on_hover_text(match node.role {
+                    Role::Sibling { half: true } => format!("{label}\nhalf-sibling"),
+                    Role::OtherParent => format!("{label}\nadoptive or other parent"),
+                    _ => label.clone(),
+                })
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+            if response.clicked() && node.id != focus {
+                action = Some(TreeAction::Focus(node.id.clone()));
             }
+            self.draw_box(painter, rect, person, node, response.hovered(), node.id == focus, photo);
         }
+        action
+    }
 
-        if action.is_none() && response.double_clicked() {
-            self.auto_fit = true;
-        }
-        let fit_button = Rect::from_min_size(canvas.right_top() + Vec2::new(-52.0, 8.0), Vec2::new(44.0, 22.0));
-        if ui
-            .put(fit_button, egui::Button::new("Fit"))
-            .on_hover_text("Fit tree to view (or double-click background)")
-            .clicked()
-        {
-            self.auto_fit = true;
-        }
+    #[allow(clippy::too_many_arguments)]
+    fn draw_box(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        person: &Person,
+        node: &layout::Node,
+        hovered: bool,
+        is_focus: bool,
+        photo: &mut PhotoFn,
+    ) {
+        let z = self.zoom;
+        let fill = gender_fill(person.gender);
+        let fill = if hovered { fill.gamma_multiply(1.3) } else { fill };
+        let stroke = if is_focus {
+            Stroke::new(3.0, Color32::from_rgb(0xf0, 0xc0, 0x40))
+        } else {
+            Stroke::new(1.0, Color32::from_black_alpha(90))
+        };
+        let radius = CornerRadius::same((7.0 * z).round().min(255.0) as u8);
+        painter.rect(rect, radius, fill, stroke, StrokeKind::Inside);
 
-        painter.text(
-            canvas.left_bottom() + Vec2::new(8.0, -8.0),
+        let mut text_rect = rect.shrink(6.0 * z);
+        if let Some((texture, uv)) = photo(person) {
+            let side = rect.height() - 8.0 * z;
+            let img = Rect::from_min_size(rect.left_top() + Vec2::splat(4.0 * z), Vec2::splat(side));
+            painter.image(texture, img, uv, Color32::WHITE);
+            text_rect.min.x = img.right() + 6.0 * z;
+        }
+        let font = |size: f32| FontId::proportional(size * z);
+        let clip = painter.with_clip_rect(text_rect.intersect(self.canvas));
+        let c = text_rect.center();
+        clip.text(
+            c - Vec2::new(0.0, 9.0 * z),
+            Align2::CENTER_CENTER,
+            person.display_name(),
+            font(15.0),
+            Color32::WHITE,
+        );
+        let mut sub = format!("{} {}", gender_symbol(person.gender), person.lifespan());
+        if let Role::Sibling { half: true } = node.role {
+            sub.push_str(" · half");
+        }
+        clip.text(c + Vec2::new(0.0, 12.0 * z), Align2::CENTER_CENTER, sub.trim(), font(13.0), Color32::from_gray(225));
+
+        // more relatives beyond the view
+        let marker = |at: Pos2, text: &str| {
+            painter.text(
+                at,
+                Align2::CENTER_CENTER,
+                text,
+                FontId::proportional(12.0 * z.max(0.6)),
+                Color32::from_gray(200),
+            );
+        };
+        if node.more_up {
+            marker(rect.center_top() - Vec2::new(0.0, 8.0 * z), "▲");
+        }
+        if node.more_down {
+            marker(rect.center_bottom() + Vec2::new(0.0, 8.0 * z), "▼");
+        }
+    }
+
+    /// Overlay: header with back/forward, zoom and generation controls, help.
+    fn controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        canvas: Rect,
+        tree: &Tree,
+        focus: &str,
+        nav: &NavState,
+    ) -> Option<TreeAction> {
+        let mut action = None;
+        let name = tree.person(focus).map(|p| p.display_name()).unwrap_or_default();
+        let header =
+            Rect::from_min_size(canvas.left_top() + Vec2::new(8.0, 8.0), Vec2::new(canvas.width() - 16.0, 30.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(header), |ui| {
+            ui.horizontal(|ui| {
+                if ui.add_enabled(nav.can_back, egui::Button::new("◀ Back")).on_hover_text("Alt+Left").clicked() {
+                    action = Some(TreeAction::Back);
+                }
+                if ui.add_enabled(nav.can_forward, egui::Button::new("Forward ▶")).on_hover_text("Alt+Right").clicked()
+                {
+                    action = Some(TreeAction::Forward);
+                }
+                ui.label(egui::RichText::new(format!("Family of {name}")).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Fit").on_hover_text("Show the whole tree (or double-click the background)").clicked()
+                    {
+                        self.auto_fit = true;
+                    }
+                    if ui.button(" + ").on_hover_text("Zoom in").clicked() {
+                        self.zoom_by(1.25, canvas.center(), canvas);
+                    }
+                    if ui.button(" − ").on_hover_text("Zoom out").clicked() {
+                        self.zoom_by(0.8, canvas.center(), canvas);
+                    }
+                    ui.separator();
+                    let mut gens = |ui: &mut egui::Ui, label: &str, value: &mut u32| {
+                        let before = *value;
+                        ui.add(egui::DragValue::new(value).range(0..=8)).on_hover_text("Number of generations shown");
+                        ui.label(label);
+                        if *value != before {
+                            self.auto_fit = true;
+                        }
+                    };
+                    let mut s = self.settings;
+                    gens(ui, "Descendants", &mut s.descendants);
+                    gens(ui, "Ancestors", &mut s.ancestors);
+                    self.settings = s;
+                });
+            });
+        });
+        ui.painter().text(
+            canvas.left_bottom() + Vec2::new(10.0, -10.0),
             Align2::LEFT_BOTTOM,
-            "drag to pan · scroll to zoom · click to select · double-click a person to centre, background to fit",
-            FontId::proportional(11.0),
+            "Click a person to show their family · drag to move · scroll to zoom · arrow keys: ↑ parent ↓ child ← → siblings",
+            FontId::proportional(13.0),
             ui.visuals().weak_text_color(),
         );
         action
     }
 }
 
-impl TreeView {
-    /// Zoom and pan so the whole layout fits the canvas.
-    fn fit(&mut self, layout: &Layout, canvas: Rect) {
-        let bounds = layout
-            .boxes
-            .iter()
-            .map(|(_, c)| Rect::from_center_size(*c, BOX))
-            .reduce(|a, b| a.union(b))
-            .unwrap_or(Rect::from_center_size(Pos2::ZERO, BOX))
-            .expand(24.0);
-        self.zoom = (canvas.width() / bounds.width()).min(canvas.height() / bounds.height()).clamp(0.35, 1.0);
-        self.pan = -bounds.center().to_vec2() * self.zoom;
-    }
-}
-
-fn layout(tree: &Tree, focus: &str) -> Layout {
-    let mut l = Layout { boxes: Vec::new(), edges: Vec::new(), marriages: Vec::new() };
-    let step = BOX.x + H_GAP;
-    let row = BOX.y + V_GAP;
-
-    // focus row: focus then spouses to the right
-    l.boxes.push((focus.to_string(), Pos2::ZERO));
-    for (i, spouse) in tree.spouses(focus).into_iter().enumerate() {
-        let x = step * (i as f32 + 1.0);
-        let prev_x = x - step;
-        l.boxes.push((spouse.to_string(), Pos2::new(x, 0.0)));
-        l.marriages.push((Pos2::new(prev_x + BOX.x / 2.0, 0.0), Pos2::new(x - BOX.x / 2.0, 0.0)));
-    }
-
-    // ancestors: binary slots per generation, father on the left
-    // the top generation has 2^G slots of one box each
-    let width = step * 2f32.powi(ANCESTOR_GENERATIONS as i32);
-    let mut generation: Vec<(Option<String>, f32)> = vec![(Some(focus.to_string()), 0.0)];
-    for g in 1..=ANCESTOR_GENERATIONS {
-        let offset = width / 2f32.powi(g as i32 + 1);
-        let y = -row * g as f32;
-        let mut next = Vec::new();
-        for (child, cx) in &generation {
-            let parents = child.as_deref().map(|c| ordered_parents(tree, c)).unwrap_or([None, None]);
-            for (k, parent) in parents.into_iter().enumerate() {
-                let x = cx + if k == 0 { -offset } else { offset };
-                if let Some(p) = &parent {
-                    l.boxes.push((p.clone(), Pos2::new(x, y)));
-                    l.edges.push((Pos2::new(x, y + BOX.y / 2.0), Pos2::new(*cx, y + row - BOX.y / 2.0)));
-                }
-                next.push((parent, x));
-            }
-        }
-        generation = next;
-    }
-
-    // descendants: tidy layout by subtree width
-    place_descendants(tree, focus, 0.0, 0.0, 1, &mut l);
-    l
-}
-
-/// At most two parents to draw: non-adoptive links first, preferring a
-/// couple, father on the left.
-fn ordered_parents(tree: &Tree, child: &str) -> [Option<String>; 2] {
-    let mut parents: Vec<&str> = tree
-        .parent_links
-        .iter()
-        .filter(|l| l.child == child)
-        .map(|l| (l.modifier == "Adopted", l.parent.as_str()))
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .map(|(_, p)| p)
-        .collect();
-    if parents.len() > 2 {
-        let first = parents[0];
-        let spouses = tree.spouses(first);
-        let partner = parents[1..].iter().copied().find(|p| spouses.contains(p)).unwrap_or(parents[1]);
-        parents = vec![first, partner];
-    }
-    parents.sort_by_key(|p| match tree.person(p).map(|p| p.gender) {
-        Some(Gender::Male) => 0,
-        Some(Gender::Female) => 2,
-        _ => 1,
-    });
-    [parents.first().map(|s| s.to_string()), parents.get(1).map(|s| s.to_string())]
-}
-
-fn subtree_width(tree: &Tree, id: &str, depth: u32) -> f32 {
-    let step = BOX.x + H_GAP;
-    if depth > DESCENDANT_GENERATIONS {
-        return step;
-    }
-    let kids = tree.children(id);
-    let sum: f32 = kids.iter().map(|k| subtree_width(tree, k, depth + 1)).sum();
-    sum.max(step)
-}
-
-fn place_descendants(tree: &Tree, id: &str, x: f32, y: f32, depth: u32, l: &mut Layout) {
-    if depth > DESCENDANT_GENERATIONS {
-        return;
-    }
-    let kids = tree.children(id);
-    let total: f32 = kids.iter().map(|k| subtree_width(tree, k, depth + 1)).sum();
-    let mut left = x - total / 2.0;
-    let child_y = y + BOX.y + V_GAP;
-    for kid in kids {
-        let w = subtree_width(tree, kid, depth + 1);
-        let cx = left + w / 2.0;
-        l.boxes.push((kid.to_string(), Pos2::new(cx, child_y)));
-        l.edges.push((Pos2::new(x, y + BOX.y / 2.0), Pos2::new(cx, child_y - BOX.y / 2.0)));
-        place_descendants(tree, kid, cx, child_y, depth + 1, l);
-        left += w;
-    }
+/// Pan and zoom that fit the layout into the canvas.
+fn fit(layout: &Layout, canvas: Rect) -> (Vec2, f32) {
+    let bounds = layout.bounds().expand(30.0);
+    // leave room for the header and help line
+    let avail = canvas.shrink2(Vec2::new(0.0, 40.0));
+    let zoom = (avail.width() / bounds.width()).min(avail.height() / bounds.height()).clamp(0.3, 1.1);
+    (-bounds.center().to_vec2() * zoom, zoom)
 }

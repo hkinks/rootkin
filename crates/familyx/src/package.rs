@@ -10,6 +10,7 @@ use crate::{codec, edit, Error, Result};
 const FAMILY_PART: &str = "family8";
 
 /// An opened `.familyx` file: the decoded tree plus every other part verbatim.
+#[derive(Clone)]
 pub struct Package {
     pub doc: Document,
     /// All zip entries other than `family8`, in original order.

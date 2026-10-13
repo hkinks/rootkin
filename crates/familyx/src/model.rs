@@ -14,6 +14,7 @@ pub type Id = String;
 pub enum Gender {
     Male,
     Female,
+    Other,
     #[default]
     Unknown,
 }
@@ -23,6 +24,7 @@ impl Gender {
         match s {
             "Male" => Gender::Male,
             "Female" => Gender::Female,
+            "Other" => Gender::Other,
             _ => Gender::Unknown,
         }
     }
@@ -118,6 +120,19 @@ pub fn fact_label(tag: &str) -> &str {
         "EDUC" => "Education",
         "EVEN" => "Event",
         "FACT_ContactAddress" => "Contact address",
+        "CREM" => "Cremation",
+        "EMIG" => "Emigration",
+        "IMMI" => "Immigration",
+        "NATU" => "Naturalization",
+        "RELI" => "Religion",
+        "GRAD" => "Graduation",
+        "RETI" => "Retirement",
+        "CENS" => "Census",
+        "ENGA" => "Engagement",
+        "MARB" => "Marriage banns",
+        "ANUL" => "Annulment",
+        "TITL" => "Title",
+        "DSCR" => "Physical description",
         other => other,
     }
 }

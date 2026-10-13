@@ -55,6 +55,13 @@ impl RelationDialog {
     }
 }
 
+impl RelationDialog {
+    /// Preselect the other parent of a new child.
+    pub fn set_co_parent(&mut self, co_parent: Option<Id>) {
+        self.co_parent = co_parent;
+    }
+}
+
 impl App {
     pub(crate) fn relation_dialog_ui(&mut self, ctx: &egui::Context) {
         let Some(mut dlg) = self.relation_dialog.take() else { return };
@@ -164,13 +171,13 @@ impl App {
 
         if submit {
             let dlg_ref = &dlg;
-            if let Some(id) = self.apply(|doc| commit(doc, dlg_ref)) {
+            if let Some(id) = self.apply("Add person", |doc| commit(doc, dlg_ref)) {
+                let name = self.tree.person(&id).map(|p| p.display_name()).unwrap_or_default();
                 if dlg.relation.is_none() {
                     self.select(&id);
-                    self.focus = Some(id.clone());
                 }
-                let name = self.tree.person(&id).map(|p| p.display_name()).unwrap_or_default();
-                self.status = Some(format!("Added {name}"));
+                self.form = None;
+                self.toasts.undoable(format!("Added {name}"));
             }
             done = true;
         }

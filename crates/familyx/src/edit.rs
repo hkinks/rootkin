@@ -258,7 +258,12 @@ pub fn set_gender(doc: &mut Document, person_id: &str, gender: Gender) -> EditRe
         }
         g => {
             let biology = ensure_record(person, "Biology", PERSON_ORDER);
-            biology.ensure_child("Gender", &[]).set_text(if g == Gender::Male { "Male" } else { "Female" });
+            let value = match g {
+                Gender::Male => "Male",
+                Gender::Female => "Female",
+                _ => "Other",
+            };
+            biology.ensure_child("Gender", &[]).set_text(value);
         }
     }
     touch(person);
