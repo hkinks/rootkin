@@ -256,32 +256,45 @@ pub fn parse_gramps_ymd(s: &str) -> Ymd {
 
 // ---- familyx::model::Date <-> DateValue (the only place that knows the model's shape) ----
 
-/// Returns the model date and, when the model cannot hold the value exactly,
-/// the original date text to keep in the fact's details.
-pub fn to_model(v: &DateValue) -> (Date, Option<String>) {
+/// The app's `DateDescriptor` for each kind (`""` = exact).
+const DESCRIPTORS: [(Kind, &str); 10] = [
+    (Kind::Exact, ""),
+    (Kind::About, "About"),
+    (Kind::Estimated, "Estimated"),
+    (Kind::Calculated, "Calculated"),
+    (Kind::Before, "Before"),
+    (Kind::After, "After"),
+    (Kind::Range, "Range"),
+    (Kind::Span, "Span"),
+    (Kind::FromOnly, "FromOnly"),
+    (Kind::ToOnly, "ToOnly"),
+];
+
+pub fn to_model(v: &DateValue) -> Date {
     if !v.text.is_empty() {
-        let year = year_in(&v.text);
-        let descriptor = if year.is_some() { "About" } else { "" };
-        return (Date { year, descriptor: descriptor.into(), ..Default::default() }, Some(v.text.clone()));
+        return Date { descriptor: "TextOnly".into(), text: v.text.clone(), ..Default::default() };
     }
-    let (descriptor, note) = match v.kind {
-        Kind::Exact => ("Span", None),
-        Kind::About | Kind::Estimated | Kind::Calculated => ("About", None),
-        _ => ("About", Some(v.to_gedcom())),
-    };
-    (Date { year: v.start.year, month: v.start.month, day: v.start.day, descriptor: descriptor.into() }, note)
+    let descriptor = DESCRIPTORS.iter().find(|(k, _)| *k == v.kind).map_or("", |(_, d)| d);
+    Date {
+        descriptor: descriptor.into(),
+        year: v.start.year,
+        month: v.start.month,
+        day: v.start.day,
+        end_year: v.end.year,
+        end_month: v.end.month,
+        end_day: v.end.day,
+        text: String::new(),
+    }
 }
 
 pub fn from_model(d: &Date) -> DateValue {
-    let kind = if d.descriptor == "About" { Kind::About } else { Kind::Exact };
-    DateValue { kind, start: Ymd { year: d.year, month: d.month, day: d.day }, ..Default::default() }
-}
-
-/// First 3-4 digit number in free text.
-fn year_in(text: &str) -> Option<i32> {
-    text.split(|c: char| !c.is_ascii_alphanumeric())
-        .find(|t| (3..=4).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_digit()))
-        .and_then(|t| t.parse().ok())
+    let start = Ymd { year: d.year, month: d.month, day: d.day };
+    if d.descriptor == "TextOnly" || (start.is_empty() && !d.text.is_empty()) {
+        return DateValue { text: d.text.clone(), ..Default::default() };
+    }
+    // EitherOr / Interpreted have no counterpart here: keep the start, approximately
+    let kind = DESCRIPTORS.iter().find(|(_, n)| *n == d.descriptor).map_or(Kind::About, |(k, _)| *k);
+    DateValue { kind, start, end: Ymd { year: d.end_year, month: d.end_month, day: d.end_day }, ..Default::default() }
 }
 
 #[cfg(test)]
@@ -319,10 +332,12 @@ mod tests {
     }
 
     #[test]
-    fn model_conversion_keeps_year_and_note() {
-        let (d, note) = to_model(&DateValue::from_gedcom("BEF 1900"));
-        assert_eq!((d.year, d.descriptor.as_str(), note.as_deref()), (Some(1900), "About", Some("BEF 1900")));
-        let (d, note) = to_model(&DateValue::from_gedcom("14 MAR 1890"));
-        assert_eq!((d.day, note), (Some(14), None));
+    fn model_conversion_is_native() {
+        let d = to_model(&DateValue::from_gedcom("BET 1900 AND 1910"));
+        assert_eq!((d.descriptor.as_str(), d.year, d.end_year), ("Range", Some(1900), Some(1910)));
+        assert_eq!(from_model(&d).to_gedcom(), "BET 1900 AND 1910");
+        let d = to_model(&DateValue::from_gedcom("garbled"));
+        assert_eq!((d.descriptor.as_str(), d.text.as_str()), ("TextOnly", "garbled"));
+        assert_eq!(from_model(&d).to_gedcom(), "(garbled)");
     }
 }

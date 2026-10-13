@@ -1,0 +1,549 @@
+//! Gramps XML 1.7.1 (`.gramps`, gzip-compressed) export and import.
+//!
+//! Places are written flat (the whole place string as one `pname`); on import
+//! a place hierarchy is joined back into `Name, Parent, Country`.
+
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
+
+use familyx::doc::{escape, Document, Element};
+use familyx::edit::{self, FactInput};
+use familyx::model::{Fact, Gender, Tree};
+use familyx::Package;
+
+use crate::dates::{self, DateValue, Kind};
+use crate::families::{self, Fam};
+use crate::vocab::{self, GRAMPS_TYPES};
+use crate::{Dropped, Error, ImportReport, Result};
+
+const NS: &str = "http://gramps-project.org/xml/1.7.1/";
+
+// ---------------------------------------------------------------- export
+
+fn text(s: &str) -> String {
+    escape(s, false)
+}
+
+fn attr(s: &str) -> String {
+    escape(s, true)
+}
+
+fn gramps_type(fact: &Fact) -> String {
+    match GRAMPS_TYPES.iter().find(|(t, _)| *t == fact.tag) {
+        Some((_, ty)) => (*ty).to_string(),
+        None if fact.tag == "EVEN" => "Event".to_string(),
+        None => fact.label().to_string(),
+    }
+}
+
+fn gramps_name_type(ty: &str) -> String {
+    match ty {
+        "" => "Also Known As".into(),
+        "Birth" => "Birth Name".into(),
+        "Aka" => "Also Known As".into(),
+        "Married" => "Married Name".into(),
+        other => other.to_string(),
+    }
+}
+
+/// Gramps `frel` / `mrel` for a parent-link modifier.
+fn child_rel(modifier: &str) -> &'static str {
+    match modifier {
+        "" | "Natural" => "Birth",
+        "Adopted" => "Adopted",
+        "Foster" => "Foster",
+        "Step" => "Stepchild",
+        _ => "Unknown",
+    }
+}
+
+struct Event<'a> {
+    fact: &'a Fact,
+}
+
+pub fn export(pkg: &Package) -> Result<Vec<u8>> {
+    let tree = Tree::from_doc(&pkg.doc);
+    let fams = families::build(&tree);
+    let change = chrono::Utc::now().timestamp();
+
+    // events: one per fact; places: one per distinct place string
+    let mut events: Vec<Event> = Vec::new();
+    let person_events: Vec<Vec<usize>> = tree
+        .people
+        .iter()
+        .map(|p| {
+            p.facts
+                .iter()
+                .map(|fact| {
+                    events.push(Event { fact });
+                    events.len() - 1
+                })
+                .collect()
+        })
+        .collect();
+    let fam_events: Vec<Vec<usize>> = fams
+        .iter()
+        .map(|f| {
+            f.link
+                .iter()
+                .flat_map(|l| &l.facts)
+                .map(|fact| {
+                    events.push(Event { fact });
+                    events.len() - 1
+                })
+                .collect()
+        })
+        .collect();
+    let mut places: Vec<&str> = Vec::new();
+    for e in events.iter().filter(|e| !e.fact.place.is_empty()) {
+        if !places.contains(&e.fact.place.as_str()) {
+            places.push(&e.fact.place);
+        }
+    }
+
+    let person_handle = |id: &str| tree.people.iter().position(|p| p.id == id).map(|i| format!("_i{}", i + 1));
+    let mut out = String::new();
+    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    out.push_str("<!DOCTYPE database PUBLIC \"-//Gramps//DTD Gramps XML 1.7.1//EN\"\n");
+    out.push_str("\"http://gramps-project.org/xml/1.7.1/grampsxml.dtd\">\n");
+    out.push_str(&format!("<database xmlns=\"{NS}\">\n"));
+    out.push_str(&format!(
+        "  <header>\n    <created date=\"{}\" version=\"5.1.0\"/>\n  </header>\n",
+        chrono::Utc::now().format("%Y-%m-%d")
+    ));
+
+    if !events.is_empty() {
+        out.push_str("  <events>\n");
+        for (i, e) in events.iter().enumerate() {
+            out.push_str(&format!("    <event handle=\"_e{0}\" id=\"E{0:04}\" change=\"{change}\">\n", i + 1));
+            out.push_str(&format!("      <type>{}</type>\n", text(&gramps_type(e.fact))));
+            let date = dates::from_model(&e.fact.date).to_gramps_xml();
+            if !date.is_empty() {
+                out.push_str(&format!("      {date}\n"));
+            }
+            if let Some(p) = places.iter().position(|p| *p == e.fact.place) {
+                out.push_str(&format!("      <place hlink=\"_pl{}\"/>\n", p + 1));
+            }
+            if !e.fact.details.is_empty() {
+                out.push_str(&format!("      <description>{}</description>\n", text(&e.fact.details)));
+            }
+            out.push_str("    </event>\n");
+        }
+        out.push_str("  </events>\n");
+    }
+
+    out.push_str("  <people>\n");
+    for (i, person) in tree.people.iter().enumerate() {
+        out.push_str(&format!("    <person handle=\"_i{0}\" id=\"I{0:04}\" change=\"{change}\">\n", i + 1));
+        let gender = match person.gender {
+            Gender::Male => "M",
+            Gender::Female => "F",
+            Gender::Unknown => "U",
+        };
+        out.push_str(&format!("      <gender>{gender}</gender>\n"));
+        let primary = person.primary_name();
+        for name in primary.into_iter().chain(person.names.iter().filter(|n| Some(*n) != primary)) {
+            let is_alt = Some(name) != primary;
+            let ty = if is_alt { gramps_name_type(&name.name_type) } else { "Birth Name".into() };
+            let alt = if is_alt { " alt=\"1\"" } else { "" };
+            out.push_str(&format!("      <name{alt} type=\"{}\">\n", attr(&ty)));
+            if !name.given.is_empty() {
+                out.push_str(&format!("        <first>{}</first>\n", text(&name.given)));
+            }
+            if !name.surname.is_empty() || !name.surname_prefix.is_empty() {
+                let prefix = if name.surname_prefix.is_empty() {
+                    String::new()
+                } else {
+                    format!(" prefix=\"{}\"", attr(&name.surname_prefix))
+                };
+                out.push_str(&format!("        <surname{prefix}>{}</surname>\n", text(&name.surname)));
+            }
+            if !name.suffix.is_empty() {
+                out.push_str(&format!("        <suffix>{}</suffix>\n", text(&name.suffix)));
+            }
+            if !name.nickname.is_empty() {
+                out.push_str(&format!("        <nick>{}</nick>\n", text(&name.nickname)));
+            }
+            out.push_str("      </name>\n");
+        }
+        for e in &person_events[i] {
+            out.push_str(&format!("      <eventref hlink=\"_e{}\" role=\"Primary\"/>\n", e + 1));
+        }
+        for (f, fam) in fams.iter().enumerate() {
+            if fam.children.iter().any(|c| c.id == person.id) {
+                out.push_str(&format!("      <childof hlink=\"_f{}\"/>\n", f + 1));
+            }
+        }
+        for (f, fam) in fams.iter().enumerate() {
+            if fam.husb == Some(&person.id) || fam.wife == Some(&person.id) {
+                out.push_str(&format!("      <parentin hlink=\"_f{}\"/>\n", f + 1));
+            }
+        }
+        out.push_str("    </person>\n");
+    }
+    out.push_str("  </people>\n");
+
+    if !fams.is_empty() {
+        out.push_str("  <families>\n");
+        for (f, fam) in fams.iter().enumerate() {
+            write_family(&mut out, f + 1, fam, &fam_events[f], &person_handle, change);
+        }
+        out.push_str("  </families>\n");
+    }
+
+    if !places.is_empty() {
+        out.push_str("  <places>\n");
+        for (i, place) in places.iter().enumerate() {
+            out.push_str(&format!(
+                "    <placeobj handle=\"_pl{0}\" id=\"P{0:04}\" change=\"{change}\" type=\"Unknown\">\n",
+                i + 1
+            ));
+            out.push_str(&format!("      <ptitle>{}</ptitle>\n", text(place)));
+            out.push_str(&format!("      <pname value=\"{}\"/>\n", attr(place)));
+            out.push_str("    </placeobj>\n");
+        }
+        out.push_str("  </places>\n");
+    }
+    out.push_str("</database>\n");
+
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(out.as_bytes())?;
+    Ok(gz.finish()?)
+}
+
+fn write_family(
+    out: &mut String,
+    number: usize,
+    fam: &Fam,
+    events: &[usize],
+    person_handle: &dyn Fn(&str) -> Option<String>,
+    change: i64,
+) {
+    out.push_str(&format!("    <family handle=\"_f{number}\" id=\"F{number:04}\" change=\"{change}\">\n"));
+    let married = fam.link.is_some_and(|l| l.facts.iter().any(|f| f.tag == "MARR"));
+    out.push_str(&format!("      <rel type=\"{}\"/>\n", if married { "Married" } else { "Unknown" }));
+    for (tag, id) in [("father", fam.husb), ("mother", fam.wife)] {
+        if let Some(h) = id.and_then(person_handle) {
+            out.push_str(&format!("      <{tag} hlink=\"{h}\"/>\n"));
+        }
+    }
+    for e in events {
+        out.push_str(&format!("      <eventref hlink=\"_e{}\" role=\"Family\"/>\n", e + 1));
+    }
+    for child in &fam.children {
+        if let Some(h) = person_handle(child.id) {
+            out.push_str(&format!(
+                "      <childref hlink=\"{h}\" frel=\"{}\" mrel=\"{}\"/>\n",
+                child_rel(child.husb_mod),
+                child_rel(child.wife_mod)
+            ));
+        }
+    }
+    out.push_str("    </family>\n");
+}
+
+// ---------------------------------------------------------------- import
+
+struct GEvent {
+    ty: String,
+    date: DateValue,
+    place: Option<String>,
+    description: String,
+}
+
+struct GPlace {
+    name: String,
+    title: String,
+    parent: Option<String>,
+}
+
+struct Importer {
+    pkg: Package,
+    dropped: Dropped,
+    warnings: Vec<String>,
+    events: HashMap<String, GEvent>,
+    places: HashMap<String, GPlace>,
+    people: HashMap<String, String>,
+}
+
+fn handle(el: &Element) -> String {
+    el.attr("hlink").map(|h| h.trim_start_matches('_').to_string()).unwrap_or_default()
+}
+
+/// Gramps handles may or may not start with `_`; compare without it.
+fn key(h: &str) -> String {
+    h.trim_start_matches('_').to_string()
+}
+
+fn gunzip_if_needed(bytes: &[u8]) -> Result<Vec<u8>> {
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(bytes).read_to_end(&mut out).map_err(|e| Error::Gramps(format!("gzip: {e}")))?;
+        Ok(out)
+    } else {
+        Ok(bytes.to_vec())
+    }
+}
+
+fn parse_date(ev: &Element) -> DateValue {
+    for el in ev.elements() {
+        let a = |n: &str| el.attr(n).map(|v| v.into_owned()).unwrap_or_default();
+        match el.name.as_str() {
+            "dateval" => {
+                let kind = match a("type").as_str() {
+                    "about" => Kind::About,
+                    "estimated" => Kind::Estimated,
+                    "calculated" => Kind::Calculated,
+                    "before" => Kind::Before,
+                    "after" => Kind::After,
+                    _ => Kind::Exact,
+                };
+                return DateValue { kind, start: dates::parse_gramps_ymd(&a("val")), ..Default::default() };
+            }
+            "daterange" | "datespan" => {
+                let kind = if el.name == "daterange" { Kind::Range } else { Kind::Span };
+                let (start, end) = (dates::parse_gramps_ymd(&a("start")), dates::parse_gramps_ymd(&a("stop")));
+                return DateValue { kind, start, end, ..Default::default() };
+            }
+            "datestr" => return DateValue::from_gedcom(&a("val")),
+            _ => {}
+        }
+    }
+    DateValue::default()
+}
+
+pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
+    let xml = gunzip_if_needed(bytes)?;
+    let doc = Document::parse(&xml).map_err(|e| Error::Gramps(e.to_string()))?;
+    let root = &doc.root;
+    if root.name != "database" {
+        return Err(Error::Gramps(format!("unexpected root element <{}>, expected <database>", root.name)));
+    }
+    let mut imp = Importer {
+        pkg: Package::new(),
+        dropped: Dropped::default(),
+        warnings: Vec::new(),
+        events: HashMap::new(),
+        places: HashMap::new(),
+        people: HashMap::new(),
+    };
+
+    for ev in root.child("events").into_iter().flat_map(|c| c.children_named("event")) {
+        let text = |n: &str| ev.child_text(n).unwrap_or_default();
+        imp.events.insert(
+            key(&ev.attr("handle").unwrap_or_default()),
+            GEvent {
+                ty: text("type"),
+                date: parse_date(ev),
+                place: ev.child("place").map(handle),
+                description: text("description"),
+            },
+        );
+        for c in ev.elements() {
+            if !["type", "dateval", "daterange", "datespan", "datestr", "place", "description"]
+                .contains(&c.name.as_str())
+            {
+                imp.dropped.add(format!("event.{}", c.name));
+            }
+        }
+    }
+    for p in root.child("places").into_iter().flat_map(|c| c.children_named("placeobj")) {
+        let name = p.child("pname").and_then(|n| n.attr("value")).map(|v| v.into_owned()).unwrap_or_default();
+        imp.places.insert(
+            key(&p.attr("handle").unwrap_or_default()),
+            GPlace { name, title: p.child_text("ptitle").unwrap_or_default(), parent: p.child("placeref").map(handle) },
+        );
+    }
+
+    let mut report = ImportReport::default();
+    for p in root.child("people").into_iter().flat_map(|c| c.children_named("person")) {
+        imp.person(p)?;
+        report.people += 1;
+    }
+    for f in root.child("families").into_iter().flat_map(|c| c.children_named("family")) {
+        imp.family(f);
+        report.families += 1;
+    }
+    for section in root.elements() {
+        if !["header", "events", "people", "families", "places"].contains(&section.name.as_str()) {
+            let n = section.elements().count();
+            if n > 0 {
+                imp.dropped.add_n(section.name.clone(), n);
+            }
+        }
+    }
+
+    if let Some(first) = imp.pkg.doc.root.child("PeopleCollection").and_then(|c| c.child("Person")) {
+        let id = first.attr("Id").unwrap_or_default().into_owned();
+        let _ = edit::set_home_person(&mut imp.pkg.doc, &id);
+    }
+    for problem in edit::check(&imp.pkg.doc) {
+        imp.warnings.push(format!("inconsistency after import: {problem}"));
+    }
+    imp.dropped.into_warnings(&mut imp.warnings);
+    report.warnings = imp.warnings;
+    Ok((imp.pkg, report))
+}
+
+impl Importer {
+    /// `Name, Parent, Country` from the place hierarchy.
+    fn place_title(&self, handle: &str) -> String {
+        let mut parts = Vec::new();
+        let mut seen = HashSet::new();
+        let mut cur = Some(key(handle));
+        let mut fallback = String::new();
+        while let Some(h) = cur {
+            let Some(p) = self.places.get(&h).filter(|_| seen.insert(h.clone())) else { break };
+            if fallback.is_empty() {
+                fallback = p.title.clone();
+            }
+            if !p.name.is_empty() {
+                parts.push(p.name.clone());
+            }
+            cur = p.parent.as_deref().map(key);
+        }
+        if parts.is_empty() {
+            fallback
+        } else {
+            parts.join(", ")
+        }
+    }
+
+    fn fact_for(&self, event_handle: &str) -> Option<(String, FactInput)> {
+        let ev = self.events.get(&key(event_handle))?;
+        let known = GRAMPS_TYPES.iter().find(|(_, ty)| ty.eq_ignore_ascii_case(ev.ty.trim())).map(|(t, _)| *t);
+        let (tag, details) = match known {
+            Some(tag) => (tag, ev.description.clone()),
+            None => {
+                let generic = matches!(ev.ty.trim(), "" | "Event" | "Custom" | "Unknown");
+                let parts = [(!generic).then(|| ev.ty.clone()), Some(ev.description.clone())];
+                ("EVEN", parts.into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; "))
+            }
+        };
+        let place = ev.place.as_deref().map(|h| self.place_title(h)).unwrap_or_default();
+        Some((tag.to_string(), FactInput { date: dates::to_model(&ev.date), place, details }))
+    }
+
+    fn person(&mut self, p: &Element) -> Result<()> {
+        let gender = match p.child_text("gender").as_deref().map(str::trim) {
+            Some("M") => Gender::Male,
+            Some("F") => Gender::Female,
+            _ => Gender::Unknown,
+        };
+        let names: Vec<&Element> = p.children_named("name").collect();
+        let primary = names.iter().position(|n| n.attr("alt").is_none()).unwrap_or(0);
+        let (given, surname) = names.get(primary).map(|n| self.name_parts(n)).unwrap_or_default();
+        let id = edit::add_person(&mut self.pkg.doc, &given, &surname, gender);
+        self.people.insert(key(&p.attr("handle").unwrap_or_default()), id.clone());
+        for (i, n) in names.iter().enumerate().filter(|(i, _)| *i != primary) {
+            let _ = i;
+            let (g, s) = self.name_parts(n);
+            let ty = n.attr("type").map(|t| vocab::name_type(&t)).unwrap_or("");
+            edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+        }
+
+        let (mut dead, mut birth_year) = (false, None);
+        for c in p.elements() {
+            match c.name.as_str() {
+                "eventref" => {
+                    let role = c.attr("role").map(|r| r.into_owned()).unwrap_or_default();
+                    if !role.is_empty() && role != "Primary" {
+                        self.dropped.add(format!("person.eventref with role {role}"));
+                        continue;
+                    }
+                    let Some((tag, input)) = self.fact_for(&handle(c)) else {
+                        self.warnings.push(format!("person {}: eventref to unknown event", id));
+                        continue;
+                    };
+                    if tag == "BIRT" {
+                        birth_year = birth_year.or(input.date.year);
+                    }
+                    dead |= matches!(tag.as_str(), "DEAT" | "BURI" | "CREM");
+                    edit::add_fact(&mut self.pkg.doc, &id, &tag, &input)?;
+                }
+                "gender" | "name" | "childof" | "parentin" => {}
+                other => self.dropped.add(format!("person.{other}")),
+            }
+        }
+        edit::set_living(&mut self.pkg.doc, &id, vocab::guess_living(dead, birth_year))?;
+        Ok(())
+    }
+
+    fn name_parts(&mut self, n: &Element) -> (String, String) {
+        let surname: Vec<String> = n
+            .children_named("surname")
+            .map(|s| {
+                let prefix = s.attr("prefix").map(|p| p.into_owned()).unwrap_or_default();
+                format!("{prefix} {}", s.text()).trim().to_string()
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        for c in n.elements() {
+            if !["first", "surname", "dateval", "daterange", "datespan", "datestr"].contains(&c.name.as_str()) {
+                self.dropped.add(format!("person.name.{}", c.name));
+            }
+        }
+        (n.child_text("first").unwrap_or_default().trim().to_string(), surname.join(" "))
+    }
+
+    fn family(&mut self, f: &Element) {
+        let person =
+            |el: Option<&Element>, people: &HashMap<String, String>| el.and_then(|e| people.get(&handle(e))).cloned();
+        let (father, mother) = (person(f.child("father"), &self.people), person(f.child("mother"), &self.people));
+        let link = match (&father, &mother) {
+            (Some(a), Some(b)) => match edit::link_spouse(&mut self.pkg.doc, a, b) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    self.warnings.push(format!("family: cannot link spouses: {e}"));
+                    None
+                }
+            },
+            _ => None,
+        };
+
+        for c in f.elements() {
+            match c.name.as_str() {
+                "eventref" => {
+                    let Some((tag, input)) = self.fact_for(&handle(c)) else { continue };
+                    match &link {
+                        Some(link) => {
+                            if let Err(e) = edit::add_couple_fact(&mut self.pkg.doc, link, &tag, &input) {
+                                self.warnings.push(format!("family: {tag}: {e}"));
+                            }
+                        }
+                        None => self.dropped.add(format!("family event {tag} without two spouses")),
+                    }
+                }
+                "rel" | "father" | "mother" | "childref" => {}
+                other => self.dropped.add(format!("family.{other}")),
+            }
+        }
+
+        for c in f.children_named("childref") {
+            let Some(child) = self.people.get(&handle(c)).cloned() else {
+                self.warnings.push("family: childref to unknown person".into());
+                continue;
+            };
+            for (parent, rel) in [(&father, c.attr("frel")), (&mother, c.attr("mrel"))] {
+                let Some(parent) = parent else { continue };
+                if let Err(e) = edit::link_parent(&mut self.pkg.doc, &child, parent) {
+                    self.warnings.push(format!("family: cannot link child: {e}"));
+                    continue;
+                }
+                let modifier = match rel.as_deref() {
+                    Some("Adopted") => "Adopted",
+                    Some("Foster") => "Foster",
+                    Some("Stepchild") => "Step",
+                    Some("Birth" | "Unknown") | None => "",
+                    Some(other) => {
+                        self.dropped.add(format!("childref relationship {other}"));
+                        ""
+                    }
+                };
+                if !modifier.is_empty() {
+                    let _ = edit::set_parent_modifier(&mut self.pkg.doc, &child, parent, modifier);
+                }
+            }
+        }
+    }
+}

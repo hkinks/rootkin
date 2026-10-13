@@ -8,6 +8,7 @@ mod dates;
 mod families;
 pub mod gedcom;
 pub mod gramps;
+mod vocab;
 
 use std::path::Path;
 
@@ -115,7 +116,11 @@ pub(crate) struct Dropped(std::collections::BTreeMap<String, usize>);
 
 impl Dropped {
     pub(crate) fn add(&mut self, what: impl Into<String>) {
-        *self.0.entry(what.into()).or_default() += 1;
+        self.add_n(what, 1);
+    }
+
+    pub(crate) fn add_n(&mut self, what: impl Into<String>, n: usize) {
+        *self.0.entry(what.into()).or_default() += n;
     }
 
     pub(crate) fn into_warnings(self, warnings: &mut Vec<String>) {
