@@ -1,6 +1,7 @@
 //! Headless UI tests driving the real app through its accessibility tree.
 
 use eframe::egui;
+use egui::accesskit::Role;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use familyx::Package;
@@ -18,6 +19,11 @@ fn harness() -> Harness<'static, App> {
     });
     harness.run_steps(4);
     harness
+}
+
+/// The text field currently holding `value`.
+fn text_input<'a>(h: &'a Harness<App>, value: &'a str) -> egui_kittest::Node<'a> {
+    h.get_all_by(move |n| n.role() == Role::TextInput && n.value().as_deref() == Some(value)).next().unwrap()
 }
 
 fn selected_name(h: &Harness<App>) -> String {
@@ -88,4 +94,51 @@ fn welcome_screen_starts_a_new_tree() {
     h.run_steps(3);
     assert!(h.state().tree.people.is_empty());
     h.get_by_label("New person");
+}
+
+#[test]
+fn sources_window_edits_and_deletes_sources() {
+    let mut h = harness();
+    h.state_mut().sources_ui.open = true;
+    h.run_steps(3);
+    h.get_by_label("Estonian census 1934  (1 citation)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().sources_ui.editing_title(), Some("Estonian census 1934"));
+
+    // rename through the form
+    text_input(&h, "Estonian census 1934").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    text_input(&h, "Estonian census 1934").type_text("Census of 1934");
+    h.run_steps(3);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    let census = h.state().tree.sources.iter().find(|s| s.title == "Census of 1934").expect("renamed").id.clone();
+    h.get_by_label_contains("Unsaved changes");
+
+    // deleting asks first and takes the citation along
+    h.get_by_label_contains("Delete…").click();
+    h.run_steps(3);
+    h.get_by_label_contains("removes its 1 citation");
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert!(h.state().tree.source(&census).is_none());
+    assert!(familyx::edit::check(&h.state().pkg.as_ref().unwrap().doc).is_empty());
+}
+
+#[test]
+fn citing_a_source_from_an_event() {
+    let mut h = harness();
+    let id = h.state().tree.sources[0].id.clone();
+    let before = h.state().tree.citation_count(&id);
+    h.get_all_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some("+ Cite source"))
+        .next()
+        .unwrap()
+        .click();
+    h.run_steps(3);
+    let first = h.state().tree.sources[0].display_title();
+    h.get_by_label(&first).click();
+    h.run_steps(3);
+    assert_eq!(h.state().tree.citation_count(&id), before + 1);
+    h.get_by_label_contains("Unsaved changes");
 }

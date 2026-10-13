@@ -7,7 +7,7 @@
 
 use eframe::egui::{self, Color32, RichText};
 use familyx::edit::{self, FactInput};
-use familyx::model::{fact_label, Date, Fact, Gender, Id, Person, Tree};
+use familyx::model::{fact_label, Citation, Date, Fact, Gender, Id, Person, Tree};
 
 use crate::app::App;
 use crate::relation_dialog::{Relation, RelationDialog};
@@ -54,6 +54,7 @@ pub struct PersonForm {
     given: String,
     surname: String,
     note: String,
+    citations: Vec<CitationForm>,
     facts: Vec<FactForm>,
     names: Vec<NameForm>,
     /// Typed name for a new custom event.
@@ -66,6 +67,39 @@ struct FactForm {
     place: String,
     details: String,
     note: String,
+    citations: Vec<CitationForm>,
+}
+
+/// A citation as shown in the form: the source's title and the editable page.
+struct CitationForm {
+    id: Id,
+    source_title: String,
+    page: String,
+}
+
+impl CitationForm {
+    fn new(c: &Citation, tree: &Tree) -> Self {
+        CitationForm {
+            id: c.id.clone(),
+            source_title: tree.source(&c.source).map_or_else(|| "(missing source)".to_string(), |s| s.display_title()),
+            page: c.page.clone(),
+        }
+    }
+}
+
+fn citation_forms(citations: &[Citation], tree: &Tree) -> Vec<CitationForm> {
+    citations.iter().map(|c| CitationForm::new(c, tree)).collect()
+}
+
+/// Edits for citation pages that differ from the tree.
+fn page_edits(forms: &[CitationForm], citations: &[Citation], edits: &mut Vec<FormEdit>) {
+    for form in forms {
+        if let Some(c) = citations.iter().find(|c| c.id == form.id) {
+            if c.page != form.page.trim() {
+                edits.push(FormEdit::CitationPage(form.id.clone(), form.page.trim().into()));
+            }
+        }
+    }
 }
 
 struct NameForm {
@@ -82,11 +116,13 @@ pub enum FormEdit {
     Fact(Id, FactInput),
     FactNote(Id, String),
     Name(Id, String, String, String),
+    CitationPage(Id, String),
 }
 
 impl FactForm {
-    fn new(f: &Fact) -> Self {
+    fn new(f: &Fact, tree: &Tree) -> Self {
         FactForm {
+            citations: citation_forms(&f.citations, tree),
             id: f.id.clone(),
             date: f.date.display(),
             place: f.place.clone(),
@@ -117,7 +153,8 @@ impl PersonForm {
             given: name.map(|n| n.given.clone()).unwrap_or_default(),
             surname: name.map(|n| n.surname.clone()).unwrap_or_default(),
             note: first_note(&p.notes),
-            facts: p.facts.iter().chain(couple_facts).map(FactForm::new).collect(),
+            citations: citation_forms(&p.citations, tree),
+            facts: p.facts.iter().chain(couple_facts).map(|f| FactForm::new(f, tree)).collect(),
             names: p
                 .names
                 .iter()
@@ -154,6 +191,7 @@ impl PersonForm {
         if first_note(&p.notes) != self.note.trim() {
             edits.push(FormEdit::PersonNote(self.note.trim().into()));
         }
+        page_edits(&self.citations, &p.citations, &mut edits);
         let all_facts: Vec<&Fact> =
             p.facts.iter().chain(tree.spouse_links_of(&p.id).into_iter().flat_map(|l| l.facts.iter())).collect();
         for form in &self.facts {
@@ -166,6 +204,7 @@ impl PersonForm {
             if first_note(&fact.notes) != form.note.trim() {
                 edits.push(FormEdit::FactNote(form.id.clone(), form.note.trim().into()));
             }
+            page_edits(&form.citations, &fact.citations, &mut edits);
         }
         for form in &self.names {
             let Some(n) = p.names.iter().find(|n| n.id == form.id) else { continue };
@@ -202,6 +241,8 @@ enum Action {
     AddCoupleFact(Id, &'static str),
     CoupleStatus(Id, String),
     ParentKind(Id, String),
+    Cite(Id, Id),
+    Uncite(Id),
     AddName,
     RemoveName(Id),
     MoveChild(Id, i32),
@@ -219,8 +260,53 @@ fn wide_text(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::Response
     ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY))
 }
 
+/// Citations of `owner` (a person or event id): source and page with a remove
+/// button, and a menu to cite another source. Returns whether a page field lost focus.
+fn citations_ui(
+    ui: &mut egui::Ui,
+    owner: &str,
+    forms: &mut [CitationForm],
+    tree: &Tree,
+    action: &mut Option<Action>,
+) -> bool {
+    let mut lost = false;
+    for c in forms {
+        ui.horizontal(|ui| {
+            ui.label(format!("📖 {}", c.source_title));
+            if ui.small_button("✕").on_hover_text("Remove this citation (the source stays)").clicked() {
+                *action = Some(Action::Uncite(c.id.clone()));
+            }
+            lost |= ui
+                .add(
+                    egui::TextEdit::singleline(&mut c.page)
+                        .hint_text("page, entry or detail")
+                        .desired_width(f32::INFINITY),
+                )
+                .lost_focus();
+        });
+    }
+    if tree.sources.is_empty() {
+        ui.weak("No sources yet: add some under View → Sources…");
+    } else {
+        egui::ComboBox::from_id_salt(("cite_source", owner)).selected_text("+ Cite source").show_ui(ui, |ui| {
+            for s in &tree.sources {
+                if ui.selectable_label(false, s.display_title()).clicked() {
+                    *action = Some(Action::Cite(owner.to_string(), s.id.clone()));
+                }
+            }
+        });
+    }
+    lost
+}
+
 /// Editor for one event; returns (focus lost, remove clicked).
-fn fact_editor(ui: &mut egui::Ui, label: &str, form: &mut FactForm) -> (bool, bool) {
+fn fact_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    form: &mut FactForm,
+    tree: &Tree,
+    action: &mut Option<Action>,
+) -> (bool, bool) {
     let mut lost = false;
     let mut delete = false;
     egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -253,6 +339,7 @@ fn fact_editor(ui: &mut egui::Ui, label: &str, form: &mut FactForm) -> (bool, bo
                     .desired_width(f32::INFINITY),
             )
             .lost_focus();
+        lost |= citations_ui(ui, &form.id, &mut form.citations, tree, action);
     });
     (lost, delete)
 }
@@ -265,6 +352,7 @@ impl App {
             FormEdit::Fact(id, input) => self.apply("Edit event", |d| edit::update_fact(d, &id, &input)),
             FormEdit::FactNote(id, t) => self.apply("Edit event notes", |d| edit::set_fact_note(d, &id, &t)),
             FormEdit::Name(id, g, s, t) => self.apply("Edit name", |d| edit::update_name(d, person, &id, &g, &s, &t)),
+            FormEdit::CitationPage(id, page) => self.apply("Edit citation", |d| edit::set_citation_page(d, &id, &page)),
         };
     }
 
@@ -376,7 +464,7 @@ impl App {
             egui::CollapsingHeader::new(RichText::new("Events").heading()).default_open(true).show(ui, |ui| {
                 for fact in &person.facts {
                     let Some(f) = form.fact(&fact.id) else { continue };
-                    let (lost, delete) = fact_editor(ui, fact.label(), f);
+                    let (lost, delete) = fact_editor(ui, fact.label(), f, &self.tree, &mut action);
                     lost_focus |= lost;
                     if delete {
                         action = Some(Action::DeleteFact(fact.id.clone(), fact.label().to_string()));
@@ -420,6 +508,12 @@ impl App {
                         .lost_focus();
                 },
             );
+
+            egui::CollapsingHeader::new(RichText::new("Sources").heading())
+                .default_open(!form.citations.is_empty())
+                .show(ui, |ui| {
+                    lost_focus |= citations_ui(ui, &person.id, &mut form.citations, &self.tree, &mut action);
+                });
 
             egui::CollapsingHeader::new(RichText::new("Photos").heading()).default_open(!person.media.is_empty()).show(
                 ui,
@@ -579,7 +673,7 @@ impl App {
                 });
                 for fact in &couple.facts {
                     let Some(f) = form.fact(&fact.id) else { continue };
-                    let (lost, delete) = fact_editor(ui, fact.label(), f);
+                    let (lost, delete) = fact_editor(ui, fact.label(), f, tree, action);
                     *lost_focus |= lost;
                     if delete {
                         *action = Some(Action::DeleteFact(fact.id.clone(), fact.label().to_string()));
@@ -674,6 +768,14 @@ impl App {
             }
             Action::ParentKind(parent, kind) => {
                 self.apply("Change parent type", |d| edit::set_parent_modifier(d, &pid, &parent, &kind));
+            }
+            Action::Cite(owner, source) => {
+                self.apply("Cite source", |d| edit::add_citation(d, &owner, &source, ""));
+            }
+            Action::Uncite(id) => {
+                if self.apply("Remove citation", |d| edit::remove_citation(d, &id)).is_some() {
+                    self.toasts.undoable("Removed a citation");
+                }
             }
             Action::AddName => {
                 self.apply("Add name", |d| edit::add_alternate_name(d, &pid, "", "", ""));

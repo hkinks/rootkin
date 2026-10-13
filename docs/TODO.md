@@ -6,7 +6,7 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 
 1. Verify in the Windows app that Linux-saved files open (see "Verify")
 2. Launch: Flathub/AUR packaging, announcements (plan kept locally, not in git)
-3. Remaining older-format leftovers (LDS facts, associations, ...) and source editing, once real sample files are available
+3. Remaining older-format leftovers (LDS facts, associations, ...), confirmed with real old files when available
 
 ## Publishing
 
@@ -40,7 +40,7 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
       a hand-written GEDCOM with unsupported tags
 - [x] Photos in export/import (GEDCOM `OBJE`, Gramps `objects`; files in `<name>_media/`)
 - [x] GEDCOM 7.0 export (import already tolerant of 7.0)
-- [ ] Sources/citations in import/export (needs the app's source schema from real samples)
+- [x] Sources/citations in import/export (schema derived from the app's classes, unverified against real files)
 
 ## Verify
 - [x] Re-encrypted unmodified file, a newly created file, a GEDCOM-imported file and an edited file
@@ -73,8 +73,8 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
 - [x] Keyboard navigation (arrows to parent/child/spouse)
 
 ## Data / format
-- [x] Sources and repositories shown read-only (View → Sources); preserved on save
-- [ ] Edit sources/citations (needs real sample data for the schema)
+- [x] Sources window (View → Sources…): list, add, edit, delete (with its citations)
+- [x] Edit sources/citations: "+ Cite source" on events and on the person, page field, remove
 - [~] Older formats (`family7`, `family5`, `family4`, `family`, plain `content.xml`, family8/7 V1/V2): containers
       decrypt (verified against the app's own decrypt code) and the old element schema is migrated on open
       (`crate::migrate`, `Package::migration()`): relationships -> links with back-references, names, photos/files,

@@ -68,11 +68,23 @@ fn check(tree: &Tree, report: &ImportReport) {
     assert!(has("INDI._CUSTOM"), "{:?}", report.warnings);
     assert!(has("INDI.NOTE"));
     assert!(has("photo"), "the OBJE file does not exist or is not PNG/JPEG");
-    assert!(has("INDI.BIRT.SOUR"));
+    assert!(has("INDI.BIRT.SOUR.QUAY"));
+    assert!(has("SOUR.DATA"));
     assert!(has("FAM._MARR_LICENCE"));
     assert!(has("FAM.MARR without two spouses"));
-    assert!(has("SOUR record"));
+    assert!(!has("SOUR record") && !has("REPO record"));
     assert!(has("INDI.NAME._MARNM"));
+
+    // sources, repositories and citations
+    assert_eq!(tree.sources.len(), 2, "{:?}", tree.sources);
+    let parish = tree.sources.iter().find(|s| s.title == "Parish register").unwrap();
+    assert_eq!((parish.author.as_str(), parish.publisher.as_str()), ("Rev. Fictional", "Kuressaare 1850"));
+    assert_eq!(parish.call_number, "KA 7/2");
+    assert_eq!(tree.repository(parish.repository.as_deref().unwrap()).unwrap().title, "Saaremaa Archive");
+    let birth_cite = &by_name(tree, "Oskar Valdmann").fact("BIRT").unwrap().citations;
+    assert_eq!((birth_cite[0].source.as_str(), birth_cite[0].page.as_str()), (parish.id.as_str(), "p. 12"));
+    let bible = tree.sources.iter().find(|s| s.title == "Family Bible").unwrap();
+    assert_eq!(by_name(tree, "Oskar Valdmann").citations[0].source, bible.id);
 }
 
 #[test]

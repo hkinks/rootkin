@@ -4,7 +4,7 @@ use std::io::Cursor;
 
 use anyhow::Result;
 use familyx::doc::Document;
-use familyx::edit::{self, FactInput};
+use familyx::edit::{self, FactInput, SourceInput};
 use familyx::model::{Date, Gender, Id};
 use familyx::Package;
 
@@ -178,6 +178,50 @@ pub fn build() -> Result<Package> {
         edit::set_living(b.doc, id, true)?;
     }
     edit::set_home_person(b.doc, &erik)?;
+
+    // sources: one archive, three sources, citations on a fact, a couple fact and a person
+    let archive = edit::add_repository(b.doc, "Tallinn City Archives")?;
+    let register = edit::add_source(
+        b.doc,
+        &SourceInput {
+            title: "Uppsala cathedral parish register 1885-1895".into(),
+            author: "Parish clerks of Uppsala".into(),
+            publisher: "Uppsala Cathedral parish (manuscript)".into(),
+            repository: Some(archive),
+            call_number: "EAA.1234.1.56".into(),
+            ..Default::default()
+        },
+    )?;
+    let bible = edit::add_source(
+        b.doc,
+        &SourceInput {
+            title: "Lindqvist family Bible".into(),
+            note: Some("Births and deaths entered by hand on the flyleaf.".into()),
+            ..Default::default()
+        },
+    )?;
+    let census = edit::add_source(
+        b.doc,
+        &SourceInput {
+            title: "Estonian census 1934".into(),
+            abbreviation: "Census 1934".into(),
+            publisher: "Central Bureau of Statistics".into(),
+            ..Default::default()
+        },
+    )?;
+    let fact_of = |doc: &Document, person: &Id, tag: &str| -> Result<Id> {
+        let tree = familyx::model::Tree::from_doc(doc);
+        let fact = tree.person(person).and_then(|p| p.fact(tag)).ok_or_else(|| anyhow::anyhow!("no {tag} fact"))?;
+        Ok(fact.id.clone())
+    };
+    let birth = fact_of(b.doc, &arthur, "BIRT")?;
+    edit::add_citation(b.doc, &birth, &register, "p. 214, no. 31")?;
+    let wedding = familyx::model::Tree::from_doc(b.doc).spouse_links_of(&arthur)[0].facts[0].id.clone();
+    edit::add_citation(b.doc, &wedding, &register, "p. 88")?;
+    edit::add_citation(b.doc, &arthur, &bible, "")?;
+    let birth = fact_of(b.doc, &karl, "BIRT")?;
+    edit::add_citation(b.doc, &birth, &census, "household 17")?;
+    edit::add_citation(b.doc, &birth, &bible, "flyleaf")?;
 
     pkg.add_photo(&erik, portrait([70, 110, 170])?, "png", "erik.png")?;
     pkg.add_photo(&liis, portrait([170, 80, 110])?, "png", "liis wedding.png")?;

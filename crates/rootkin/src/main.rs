@@ -6,6 +6,7 @@ mod person_panel;
 mod photos;
 mod recent;
 mod relation_dialog;
+mod sources;
 mod toasts;
 mod tree_view;
 #[cfg(test)]
