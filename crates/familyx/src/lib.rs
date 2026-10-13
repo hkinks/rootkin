@@ -9,6 +9,7 @@ pub mod codec;
 pub mod date;
 pub mod doc;
 pub mod edit;
+mod lds_temples;
 pub mod migrate;
 pub mod model;
 pub mod package;

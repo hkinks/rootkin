@@ -14,9 +14,18 @@ use crate::model::{Date, Gender, Id};
 pub(crate) const PERSON_ORDER: &[&str] = &[
     "PersonNameCollection",
     "Biology",
+    "BirthOrder",
+    "Privacy",
+    "Aliases",
+    "Authors",
+    "AncestralInterests",
+    "DescendantInterests",
+    "Associations",
+    "Tags",
     "FamilyChildLinks",
     "FamilySpouseLinks",
     "PersonCitationCollection",
+    "FamilyCrestId",
     "PrimaryImageId",
     "Face",
     "IsLiving",
@@ -24,29 +33,73 @@ pub(crate) const PERSON_ORDER: &[&str] = &[
     "Multimedia",
     "Notes",
 ];
-const NAME_ORDER: &[&str] =
-    &["Names", "SurnamePrefix", "Surname", "Suffix", "Nickname", "Notes", "IsPrimary", "NameType"];
+pub(crate) const NAME_ORDER: &[&str] = &[
+    "Prefix",
+    "Names",
+    "SurnamePrefix",
+    "Surname",
+    "Suffix",
+    "Nickname",
+    "Patronymic",
+    "Matronymic",
+    "CallName",
+    "Translations",
+    "NameCitationCollection",
+    "Notes",
+    "IsPrimary",
+    "NameType",
+];
 pub(crate) const FACT_ORDER: &[&str] = &[
+    "Associations",
     "Tag",
     "CustomFactTag",
-    "Details",
     "ReligiousAffiliation",
+    "Details",
+    "NumberDetails",
+    "Privacy",
     "IsPrimary",
+    "DidNotHappen",
     "FactDatePeriod",
     "IsFamily",
     "FactDate",
     "SortDate",
     "PlaceDetails",
+    "Temple",
+    "DateStatus",
+    "StatusDate",
     "FullAddress",
+    "ResponsibleAgency",
+    "Cause",
     "AgeAtEvent",
     "Ages",
     "FactCitationCollection",
     "Multimedia",
     "Notes",
 ];
-// CustomDate property order (the subset we write); see docs/design.md
-const FACT_DATE_ORDER: &[&str] =
-    &["StartDay", "StartMonth", "StartYear", "EndDay", "EndMonth", "EndYear", "DateDescriptor", "StartTime", "Text"];
+// CustomDate property order as XmlSerializer writes it (declaration order of the class); see docs/design.md
+pub(crate) const FACT_DATE_ORDER: &[&str] = &[
+    "StartDay",
+    "StartMonth",
+    "StartYear",
+    "EndDay",
+    "EndMonth",
+    "EndYear",
+    "StartTime",
+    "EndTime",
+    "DateDescriptor",
+    "StartCalendar",
+    "EndCalendar",
+    "IsStartMonthLeap",
+    "IsEndMonthLeap",
+    "IsStartDayLeap",
+    "IsEndDayLeap",
+    "IsStartYearDual",
+    "IsEndYearDual",
+    "StartEra",
+    "EndEra",
+    "Text",
+    "InterpretedText",
+];
 const PLACE_ORDER: &[&str] = &["Description", "Longitude", "Latitude", "BoundingBox"];
 pub(crate) const FAMILY_ORDER: &[&str] = &[
     "AuthorCollection",
@@ -876,7 +929,7 @@ const SOURCE_ORDER: &[&str] = &[
 const SOURCE_REPOSITORY_ORDER: &[&str] =
     &["CallNumber", "MultimediaType", "CustomMultimediaType", "Repository", "Notes"];
 const REPOSITORY_ORDER: &[&str] = &["Title", "FullAddress", "Notes", "LastSavedNotes", "Privacy"];
-const CITATION_ORDER: &[&str] = &[
+pub(crate) const CITATION_ORDER: &[&str] = &[
     "Source",
     "Page",
     "EventType",
@@ -892,7 +945,7 @@ const CITATION_ORDER: &[&str] = &[
     "Notes",
     "Privacy",
 ];
-const CITATION_COLLECTION_ORDER: &[&str] = &["Citations", "Index"];
+pub(crate) const CITATION_COLLECTION_ORDER: &[&str] = &["Citations", "Index"];
 
 /// Fields of a source as edited in the UI.
 #[derive(Debug, Clone, Default, PartialEq)]

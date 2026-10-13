@@ -2,7 +2,8 @@
 //!
 //! Versions of the app before 11.3 serialized relationships per person
 //! (`Person/Relationships`), names as `Person/Name` + `Person/AlternativeName`,
-//! photos as `Person/Photos`, and so on. The current app reads such files into
+//! photos as `Person/Photos`, LDS facts, biology details, fact witnesses and
+//! addresses in members that were later replaced, and so on. The current app reads such files into
 //! its current classes (the old members survive as `Obsolete*` properties) and
 //! runs a version-gated conversion chain (`FileConversions`) before showing the
 //! tree. This module performs the structural part of that chain on the XML
@@ -17,7 +18,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::doc::{Document, Element, Node};
-use crate::edit::{self, record, text_el, FACT_ORDER, FAMILY_ORDER, PERSON_ORDER};
+use crate::edit::{self, record, text_el, FACT_DATE_ORDER, FACT_ORDER, FAMILY_ORDER, NAME_ORDER, PERSON_ORDER};
+
+mod facts;
 
 /// Schema version written by the current app (`FileProperties/Version`).
 pub const CURRENT_VERSION: f64 = 14.8;
@@ -48,17 +51,42 @@ pub struct Report {
     pub parent_links: usize,
     pub media: usize,
     pub notes: usize,
+    /// Facts made from `LDSFacts` and the obsolete `Biology` fields.
+    pub facts: usize,
+    /// Associations made from godparent/sponsor/witness relations and fact witnesses.
+    pub associations: usize,
     /// Old data that was kept but could not be converted (see docs/design.md).
     pub warnings: Vec<String>,
+    /// Old data that was dropped because the app drops it too (relations to people that do not exist, ...).
+    pub dropped: Vec<String>,
 }
 
-/// True if the tree still contains elements of the pre-link schema.
+/// Obsolete members of a `Fact`.
+const LEGACY_FACT: [&str; 7] = ["FactType", "Place", "Address", "Addresses", "Witnesses", "Citation", "Note"];
+/// Obsolete members of `Biology`.
+const LEGACY_BIOLOGY: [&str; 6] =
+    ["HairColor", "LeftEyeColor", "RightEyeColor", "BloodGroup", "HaplogroupY", "HaplogroupM"];
+
+/// True if the tree still contains elements of the old schema (anything [`migrate`] converts, or keeps
+/// because it cannot, like a database-backed `Story`).
 pub fn has_legacy_elements(doc: &Document) -> bool {
+    let legacy_fact = |facts: &Element| {
+        facts.children_named("Fact").any(|f| f.elements().any(|e| LEGACY_FACT.contains(&e.name.as_str())))
+    };
     doc.root.elements().any(|e| LEGACY_ROOT.contains(&e.name.as_str()))
+        || doc.root.path("FamilyProperties/FamilyCrest").is_some()
+        || doc.root.child("PeopleCollection").is_some_and(|c| {
+            c.elements().any(|p| {
+                p.elements().any(|e| LEGACY_PERSON.contains(&e.name.as_str()))
+                    || p.child("Biology")
+                        .is_some_and(|b| b.elements().any(|e| LEGACY_BIOLOGY.contains(&e.name.as_str())))
+                    || p.child("Facts").is_some_and(legacy_fact)
+            })
+        })
         || doc
             .root
-            .child("PeopleCollection")
-            .is_some_and(|c| c.elements().any(|p| p.elements().any(|e| LEGACY_PERSON.contains(&e.name.as_str()))))
+            .child("RelationshipCollection")
+            .is_some_and(|c| c.elements().any(|l| l.child("Facts").is_some_and(legacy_fact)))
 }
 
 fn file_version(doc: &Document) -> Option<f64> {
@@ -78,11 +106,14 @@ pub fn migrate(doc: &mut Document, parts: &dyn Fn(&str) -> Option<Vec<u8>>) -> O
     let mut report =
         Report { from_version: doc.root.child_text("FileProperties/Version").unwrap_or_default(), ..Report::default() };
 
+    let version = file_version(doc);
     normalize_ids(doc);
     move_author(doc);
-    migrate_media(doc, parts, &mut report);
-    migrate_people(doc, parts, &mut report);
-    migrate_relationships(doc, &mut report);
+    let crest = migrate_media(doc, parts, &mut report);
+    migrate_people(doc, parts, version, &mut report);
+    migrate_relationships(doc, version, &mut report);
+    assign_family_crest(doc, crest);
+    facts::migrate_citations(&mut doc.root);
     // The `Version` bump makes the app skip its own (already done) conversions.
     let props = doc.root.ensure_child("FileProperties", FAMILY_ORDER);
     props.ensure_child("Version", &["Version", "LastSavedDate", "CreationDate"]).set_text(&CURRENT_VERSION.to_string());
@@ -229,33 +260,50 @@ fn move_author(doc: &mut Document) {
 
 // ------------------------------------------------------------------ dates
 
-const DATE_ORDER: &[&str] = &[
-    "StartDay",
-    "StartMonth",
-    "StartYear",
-    "StartEra",
-    "StartCalendar",
-    "EndDay",
-    "EndMonth",
-    "EndYear",
-    "EndEra",
-    "EndCalendar",
-    "DateDescriptor",
-    "StartTime",
-    "EndTime",
-    "Text",
+const DATE_ORDER: &[&str] = FACT_DATE_ORDER;
+/// `CalendarDescriptor` enum of the app (the old `CalendarType` text).
+const CALENDARS: [&str; 28] = [
+    "GregorianCalendar",
+    "JulianCalendar",
+    "FrenchRepublicanCalendar",
+    "SwedishCalendar",
+    "QuakerCalendar",
+    "IcelandicCalendar",
+    "HebrewCalendar",
+    "AstronomicalSolarHijriCalendar",
+    "LunarHijriCalendar",
+    "UmmAlQuraCalendar",
+    "IsoCalendar",
+    "ArmenianCalendar",
+    "BahaiCalendar",
+    "HinduSolarCalendar",
+    "HinduLunisolarCalendar",
+    "ThaiBuddhistCalendar",
+    "TibetanLunisolarCalendar",
+    "JapaneseCalendar",
+    "JapaneseLunisolarCalendar",
+    "KoreanCalendar",
+    "KoreanLunisolarCalendar",
+    "TaiwanCalendar",
+    "TaiwanLunisolarCalendar",
+    "ChineseLunisolarCalendar",
+    "VietnameseLunisolarCalendar",
+    "CopticCalendar",
+    "EthiopicCalendar",
+    "EgyptianCalendar",
 ];
+/// `DateDescriptor` enum of the app.
 const DESCRIPTORS: [&str; 13] = [
     "Exact",
     "About",
     "Estimated",
     "Calculated",
+    "ToOnly",
+    "FromOnly",
+    "Span",
     "Before",
     "After",
     "Range",
-    "Span",
-    "FromOnly",
-    "ToOnly",
     "EitherOr",
     "Interpreted",
     "TextOnly",
@@ -278,14 +326,17 @@ fn parse_datetime(s: &str) -> Option<DateTime> {
         .then_some((year, month, day, h, m, sec))
 }
 
-/// Old `CustomDate` members (`StartDate`, `EndDate`, `Descriptor`, `IsTextDate`,
-/// `IsDateRange`, `IsStartBC`, `IsEndBC`, `CalendarType`) become the current
-/// `Start*`/`End*` fields and a `DateDescriptor`.
+/// Old `CustomDate` members (`StartDate`, `EndDate`, `Descriptor`, `StartDateDescriptor`, `IsTextDate`,
+/// `IsDateRange`, `IsStartBC`, `IsEndBC`, `CalendarType`) become the current `Start*`/`End*` fields and a
+/// `DateDescriptor`, as the app's oldest conversion does (checked against a differential run of it: a date
+/// range is `Span`, or `Range` if its `StartDateDescriptor` is "Between"; otherwise `Descriptor` is the enum
+/// value, an unknown one `Exact`).
 fn migrate_date(date: &mut Element) {
     let start = take(date, "StartDate");
     let end = take(date, "EndDate");
     let descriptor = take_text(date, "Descriptor");
-    let _ = (take(date, "StartDateDescriptor"), take(date, "EndDateDescriptor"));
+    let start_descriptor = take_text(date, "StartDateDescriptor");
+    let _ = take(date, "EndDateDescriptor");
     let text_date = take_text(date, "IsTextDate");
     let range = take_text(date, "IsDateRange");
     let start_bc = take_text(date, "IsStartBC");
@@ -298,6 +349,7 @@ fn migrate_date(date: &mut Element) {
     let any = start.is_some()
         || end.is_some()
         || descriptor.is_some()
+        || start_descriptor.is_some()
         || text_date.is_some()
         || range.is_some()
         || calendar.is_some();
@@ -321,33 +373,39 @@ fn migrate_date(date: &mut Element) {
     if is_true(&end_bc) {
         set_text_in(date, "EndEra", "0", DATE_ORDER);
     }
-    if let Some(cal) = nonblank(calendar).filter(|c| c != "GregorianCalendar") {
-        set_text_in(date, "StartCalendar", &cal, DATE_ORDER);
-        set_text_in(date, "EndCalendar", &cal, DATE_ORDER);
+    let known = nonblank(calendar).and_then(|c| CALENDARS.iter().find(|k| k.eq_ignore_ascii_case(c.trim())).copied());
+    if let Some(cal) = known.filter(|c| *c != "GregorianCalendar") {
+        set_text_in(date, "StartCalendar", cal, DATE_ORDER);
+        set_text_in(date, "EndCalendar", cal, DATE_ORDER);
     }
     let kind = if is_true(&text_date) {
-        "TextOnly".to_string()
+        "TextOnly"
     } else if is_true(&range) {
-        match (start.is_some(), end.is_some()) {
-            (true, false) => "FromOnly".into(),
-            (false, true) => "ToOnly".into(),
-            _ => "Range".into(),
+        match start_descriptor.as_deref().map(str::trim) {
+            Some("Between") => "Range",
+            Some("To") => "Exact",
+            _ => "Span",
         }
     } else {
-        descriptor
-            .and_then(|d| DESCRIPTORS.iter().find(|k| k.eq_ignore_ascii_case(d.trim())).map(|k| k.to_string()))
-            .unwrap_or_else(|| "Exact".into())
+        // the app also reads the plain words "From"/"To" as the open-ended descriptors
+        let d = descriptor.as_deref().map(str::trim).map(|d| match d {
+            "From" => "FromOnly",
+            "To" => "ToOnly",
+            d => d,
+        });
+        d.and_then(|d| DESCRIPTORS.iter().find(|k| k.eq_ignore_ascii_case(d)).copied()).unwrap_or("Exact")
     };
     if kind != "Exact" {
-        set_text_in(date, "DateDescriptor", &kind, DATE_ORDER);
+        set_text_in(date, "DateDescriptor", kind, DATE_ORDER);
     }
 }
 
 // ------------------------------------------------------------------ facts
 
 /// Bring one `Fact` (person or couple) to the current shape.
-fn migrate_fact(fact: &mut Element, report: &mut Report) {
+fn migrate_fact(fact: &mut Element, version: Option<f64>, report: &mut Report) {
     ensure_record_attrs(fact);
+    facts::migrate_fact_members(fact, version, report);
     if let Some(place) = nonblank(take_text(fact, "Place")) {
         let details = ensure_record(fact, "PlaceDetails", FACT_ORDER);
         if details.child_text("Description").is_none_or(|d| d.is_empty()) {
@@ -366,20 +424,39 @@ fn migrate_fact(fact: &mut Element, report: &mut Report) {
 
 // ------------------------------------------------------------------ people
 
-fn migrate_people(doc: &mut Document, parts: &dyn Fn(&str) -> Option<Vec<u8>>, report: &mut Report) {
+fn migrate_people(
+    doc: &mut Document,
+    parts: &dyn Fn(&str) -> Option<Vec<u8>>,
+    version: Option<f64>,
+    report: &mut Report,
+) {
     let Some(people) = doc.root.child_mut("PeopleCollection") else { return };
     for person in people.elements_mut().filter(|p| p.name == "Person") {
         migrate_person_names(person, report);
         if let Some(facts) = person.child_mut("Facts") {
             for fact in facts.elements_mut().filter(|f| f.name == "Fact") {
-                migrate_fact(fact, report);
+                migrate_fact(fact, version, report);
+            }
+        }
+        // new facts are appended in the order the app's conversion chain adds them: LDS facts, then biology
+        let mut added = Vec::new();
+        if let Some(lds) = take(person, "LDSFacts") {
+            added.extend(lds.elements().map(|f| facts::lds_fact(f, false, version, report)));
+        }
+        if let Some(biology) = person.child_mut("Biology") {
+            let from_biology = facts::biology_facts(biology);
+            report.facts += from_biology.len();
+            added.extend(from_biology);
+            migrate_note_string(biology, &["Gender", "YDNA", "AtDNA", "MtDNA", "Notes"], report);
+        }
+        if !added.is_empty() {
+            let facts = person.ensure_child("Facts", PERSON_ORDER);
+            for fact in added {
+                facts.push(fact);
             }
         }
         migrate_contact_address(person);
         migrate_story(person, parts, report);
-        if let Some(biology) = person.child_mut("Biology") {
-            migrate_note_string(biology, &["Gender", "Notes"], report);
-        }
     }
 }
 
@@ -401,14 +478,15 @@ fn migrate_person_names(person: &mut Element, report: &mut Report) {
     for (mut name, primary) in old {
         name.name = "Name".into();
         ensure_record_attrs(&mut name);
-        let order = ["Names", "SurnamePrefix", "Surname", "Suffix", "Nickname", "Notes", "IsPrimary", "NameType"];
+        let order = NAME_ORDER;
         if primary && !existing_primary {
-            set_text_in(&mut name, "IsPrimary", "true", &order);
+            set_text_in(&mut name, "IsPrimary", "true", order);
         } else if name.child_text("IsPrimary").as_deref() == Some("true") {
             // an alternative name is never the primary one
-            set_text_in(&mut name, "IsPrimary", "false", &order);
+            set_text_in(&mut name, "IsPrimary", "false", order);
         }
-        migrate_note_string(&mut name, &order, report);
+        facts::migrate_name_citation(&mut name);
+        migrate_note_string(&mut name, order, report);
         // The primary name goes first, as the app keeps it.
         if primary {
             let at = names.children.iter().position(|n| matches!(n, Node::Element(_))).unwrap_or(0);
@@ -458,9 +536,9 @@ fn migrate_story(person: &mut Element, parts: &dyn Fn(&str) -> Option<Vec<u8>>, 
         let found = part_candidates(&path).into_iter().find_map(|c| parts(&c));
         match found {
             Some(bytes) => {
+                // The app reads every story file as rich text, whatever its name.
                 let text = String::from_utf8_lossy(&bytes).trim_start_matches('\u{feff}').to_string();
-                let rtf = path.to_ascii_lowercase().ends_with(".rtf") || text.starts_with("{\\rtf");
-                notes.push((text, if rtf { "text/richtext" } else { "text/plain" }.to_string()));
+                notes.push((text, "text/richtext".to_string()));
             }
             None => {
                 report.warnings.push(format!("story file {path} of {person_id} is not in the package"));
@@ -497,8 +575,9 @@ fn part_candidates(rel: &str) -> Vec<String> {
 
 /// Photos, attachments and audio/video files, in the root collections and per
 /// person, become `PackagedFile` entries (`Type` Photo/Attachment/AudioVideo),
-/// referenced from `Person/Multimedia`; the avatar becomes `PrimaryImageId`.
-fn migrate_media(doc: &mut Document, parts: &dyn Fn(&str) -> Option<Vec<u8>>, report: &mut Report) {
+/// referenced from `Person/Multimedia`; the avatar becomes `PrimaryImageId`. The family crest
+/// (`FamilyProperties/FamilyCrest`) becomes a photo too; its id is returned for [`assign_family_crest`].
+fn migrate_media(doc: &mut Document, parts: &dyn Fn(&str) -> Option<Vec<u8>>, report: &mut Report) -> Option<String> {
     let kinds = [
         ("Photos", "PhotoCollection", "Photo"),
         ("Attachments", "AttachmentCollection", "Attachment"),
@@ -581,11 +660,68 @@ fn migrate_media(doc: &mut Document, parts: &dyn Fn(&str) -> Option<Vec<u8>>, re
             }
         }
     }
+    // The crest file must be in the package; the app drops a crest whose file it cannot find.
+    let crest = doc.root.child_mut("FamilyProperties").and_then(|f| take(f, "FamilyCrest"));
+    let crest_id = crest.and_then(|c| {
+        let path = nonblank(c.child_text("RelativePath"))?;
+        if part_candidates(&path).iter().all(|p| parts(p).is_none()) {
+            report.dropped.push(format!("family crest {path} is not in the package"));
+            return None;
+        }
+        register(c, "Photo", &mut properties)
+    });
     report.media = created.len();
     if !created.is_empty() {
         let files = doc.root.ensure_child("PackagedFileCollection", FAMILY_ORDER);
         for f in created {
             files.push(f);
+        }
+    }
+    crest_id
+}
+
+/// The app attaches the family crest to the first person of every separate tree (`FamilyCrestId`, also in the
+/// person's `Multimedia`). A tree is a set of people connected by couple or parent links.
+fn assign_family_crest(doc: &mut Document, crest: Option<String>) {
+    let Some(crest) = crest else { return };
+    let ids: Vec<String> = doc
+        .root
+        .child("PeopleCollection")
+        .into_iter()
+        .flat_map(|c| c.children_named("Person"))
+        .map(|p| p.attr("Id").unwrap_or_default().into_owned())
+        .collect();
+    let index: HashMap<&str, usize> = ids.iter().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
+    let mut group: Vec<usize> = (0..ids.len()).collect();
+    fn root(group: &mut [usize], mut i: usize) -> usize {
+        while group[i] != i {
+            group[i] = group[group[i]];
+            i = group[i];
+        }
+        i
+    }
+    for link in doc.root.child("RelationshipCollection").into_iter().flat_map(Element::elements) {
+        let (Some(a), Some(b)) = (
+            link.attr("Person1Id").and_then(|p| index.get(p.as_ref()).copied()),
+            link.attr("Person2Id").and_then(|p| index.get(p.as_ref()).copied()),
+        ) else {
+            continue;
+        };
+        let (ra, rb) = (root(&mut group, a), root(&mut group, b));
+        group[ra.max(rb)] = ra.min(rb);
+    }
+    let mut seen = HashSet::new();
+    let firsts: HashSet<usize> = (0..ids.len()).filter(|&i| seen.insert(root(&mut group, i))).collect();
+    if let Some(people) = doc.root.child_mut("PeopleCollection") {
+        for (i, person) in people.elements_mut().filter(|p| p.name == "Person").enumerate() {
+            if !firsts.contains(&i) {
+                continue;
+            }
+            let multimedia = person.ensure_child("Multimedia", PERSON_ORDER);
+            if !multimedia.children_named("string").any(|s| s.text() == crest) {
+                multimedia.push(text_el("string", &crest));
+            }
+            set_text_in(person, "FamilyCrestId", &crest, PERSON_ORDER);
         }
     }
 }
@@ -738,22 +874,25 @@ fn rel_kind(el: &Element) -> Option<Kind> {
 
 const MODIFIERS: [&str; 7] = ["Natural", "Adopted", "Foster", "Step", "Guardian", "Sealing", "Custom"];
 
-/// `Some("")` for natural, `Some(name)` for a modifier the current app knows,
-/// `None` for anything else (old godparent/sponsor/witness roles, which the app
-/// turns into associations instead of parent links).
-fn parent_modifier(el: &Element) -> Option<String> {
+/// Old relations whose `ParentChildModifier` is one of these (exact, case-sensitive) are not parent links but
+/// associations on the child's birth fact.
+const ROLE_MODIFIERS: [&str; 3] = ["GodParent", "Sponsor", "Witness"];
+
+fn role_modifier(el: &Element) -> Option<String> {
+    let raw = el.child_text("ParentChildModifier")?;
+    ROLE_MODIFIERS.contains(&raw.as_str()).then_some(raw)
+}
+
+/// The parent-link modifier the app derives from the old text: an empty string for natural; the matching
+/// modifier (case-insensitive) otherwise; an unknown text counts as natural.
+fn parent_modifier(el: &Element) -> String {
     let raw = el.child_text("ParentChildModifier").unwrap_or_default();
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Some(String::new());
-    }
-    MODIFIERS.iter().find(|m| m.eq_ignore_ascii_case(raw)).map(|m| {
-        if *m == "Natural" {
-            String::new()
-        } else {
-            m.to_string()
-        }
-    })
+    MODIFIERS
+        .iter()
+        .find(|m| m.eq_ignore_ascii_case(raw.trim()))
+        .filter(|m| **m != "Natural")
+        .map(|m| m.to_string())
+        .unwrap_or_default()
 }
 
 fn copy_rel(r: &Rel, owner: &str, kind: Kind) -> Rel {
@@ -764,47 +903,37 @@ fn copy_rel(r: &Rel, owner: &str, kind: Kind) -> Rel {
     Rel { kind, other: owner.to_string(), el }
 }
 
-fn migrate_relationships(doc: &mut Document, report: &mut Report) {
+fn migrate_relationships(doc: &mut Document, version: Option<f64>, report: &mut Report) {
     // 1. read every person's relationship list
     let mut ids: Vec<String> = Vec::new();
     let mut rels: Vec<Vec<Rel>> = Vec::new();
-    let mut leftover: Vec<Vec<Element>> = Vec::new();
     if let Some(people) = doc.root.child("PeopleCollection") {
         for person in people.children_named("Person") {
             ids.push(person.attr("Id").unwrap_or_default().into_owned());
+            let owner = ids.last().cloned().unwrap_or_default();
             let mut list = Vec::new();
-            let mut rest = Vec::new();
             for el in person.child("Relationships").into_iter().flat_map(Element::elements) {
                 match (rel_kind(el), el.child_text("PersonId")) {
                     (Some(Kind::Sibling), _) => {} // derived from shared parents; the app drops them
                     (Some(kind), Some(other)) => list.push(Rel { kind, other, el: el.clone() }),
-                    _ => rest.push(el.clone()),
+                    _ => report.dropped.push(format!("{owner}: relationship without a kind or a person")),
                 }
             }
             rels.push(list);
-            leftover.push(rest);
         }
     }
     let index: HashMap<&str, usize> = ids.iter().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
 
-    // unconvertible entries stay in a trimmed `Relationships` element
-    let keep = |r: &Rel, report: &mut Report, owner: &str| -> bool {
-        let known = index.contains_key(r.other.as_str()) && r.other != owner;
-        if !known {
-            report.warnings.push(format!("relationship of {owner} to unknown person {} kept as is", r.other));
-            return false;
-        }
-        if r.kind != Kind::Spouse && parent_modifier(&r.el).is_none() {
-            report.warnings.push(format!("{owner}: {} role kept as is (no association support)", r.other));
-            return false;
-        }
-        true
-    };
+    // relations to people that do not exist are dropped, as the app does
     for (i, list) in rels.iter_mut().enumerate() {
         let owner = ids[i].clone();
-        let (good, bad): (Vec<Rel>, Vec<Rel>) = std::mem::take(list).into_iter().partition(|r| keep(r, report, &owner));
-        *list = good;
-        leftover[i].extend(bad.into_iter().map(|r| r.el));
+        list.retain(|r| {
+            let known = index.contains_key(r.other.as_str()) && r.other != owner;
+            if !known {
+                report.dropped.push(format!("relationship of {owner} to unknown person {}", r.other));
+            }
+            known
+        });
     }
 
     // 2. make the relations symmetric, as the app does before pairing
@@ -828,6 +957,21 @@ fn migrate_relationships(doc: &mut Document, report: &mut Report) {
         rels[j].push(r);
     }
 
+    // 2b. godparent/sponsor/witness relations are associations on the child's birth fact, not parent links
+    //     (the app converts them from the child entries, once the lists are symmetric, and drops the entries)
+    let mut associations: Vec<(usize, String, String)> = Vec::new(); // (child, associate, role)
+    for (i, list) in rels.iter_mut().enumerate() {
+        for r in list.iter().filter(|r| r.kind == Kind::Child) {
+            if let Some(role) = role_modifier(&r.el) {
+                let entry = (index[r.other.as_str()], ids[i].clone(), role);
+                if !associations.contains(&entry) {
+                    associations.push(entry);
+                }
+            }
+        }
+        list.retain(|r| r.kind == Kind::Spouse || role_modifier(&r.el).is_none());
+    }
+
     // 3. couples, then parent-child links, in file order
     let mut done: HashSet<(usize, usize)> = HashSet::new();
     for i in 0..rels.len() {
@@ -843,7 +987,7 @@ fn migrate_relationships(doc: &mut Document, report: &mut Report) {
                 .cloned()
                 .unwrap_or_else(|| r1.clone());
             let Ok(link_id) = edit::link_spouse(doc, &ids[i], &ids[j]) else { continue };
-            fill_couple(doc, &link_id, &r1, &r2, report);
+            fill_couple(doc, &link_id, &r1, &r2, version, report);
             report.spouse_links += 1;
         }
     }
@@ -859,22 +1003,26 @@ fn migrate_relationships(doc: &mut Document, report: &mut Report) {
                 report.warnings.push(format!("parent link {} -> {} skipped (cycle or duplicate)", ids[i], ids[j]));
                 continue;
             }
-            if let Some(modifier) = parent_modifier(&r.el).filter(|m| !m.is_empty()) {
+            // The modifier is the one on the child's own `Parent` entry (what the app does; the `Child` entry
+            // of the parent is only its mirror and counts when there is no `Parent` entry).
+            let entry = rels[j].iter().find(|p| p.kind == Kind::Parent && p.other == ids[i]).unwrap_or(&r);
+            let modifier = parent_modifier(&entry.el);
+            if !modifier.is_empty() {
                 let _ = edit::set_parent_modifier(doc, &ids[j], &ids[i], &modifier);
             }
             report.parent_links += 1;
         }
     }
+    for (child, associate, role) in associations {
+        let birth = facts::birth_fact(doc, &ids[child]);
+        facts::add_association(birth, facts::association(&associate, None, &role, None));
+        report.associations += 1;
+    }
 
-    // 4. drop the old lists, keeping what could not be converted
+    // 4. drop the old lists
     if let Some(people) = doc.root.child_mut("PeopleCollection") {
-        for (person, rest) in people.elements_mut().filter(|p| p.name == "Person").zip(leftover) {
+        for person in people.elements_mut().filter(|p| p.name == "Person") {
             take(person, "Relationships");
-            if !rest.is_empty() {
-                let mut kept = Element::new("Relationships");
-                kept.children = rest.into_iter().map(Node::Element).collect();
-                person.push(kept);
-            }
         }
     }
 }
@@ -891,7 +1039,7 @@ fn has_content(fact: &Element) -> bool {
 }
 
 /// Copy status, facts, notes and files of the two old spouse entries onto the new couple link.
-fn fill_couple(doc: &mut Document, link_id: &str, r1: &Rel, r2: &Rel, report: &mut Report) {
+fn fill_couple(doc: &mut Document, link_id: &str, r1: &Rel, r2: &Rel, version: Option<f64>, report: &mut Report) {
     let Some(link) = doc
         .root
         .child_mut("RelationshipCollection")
@@ -945,10 +1093,27 @@ fn fill_couple(doc: &mut Document, link_id: &str, r1: &Rel, r2: &Rel, report: &m
         f.push(text_el("NumberDetails", &n.to_string()));
         facts.push(f);
     }
+    for f in &mut facts {
+        migrate_fact(f, version, report);
+    }
+    // Sealing facts of the couple. The app's own conversion loses these when it converts a file older than
+    // 11.1 (a later step removes them); they are family facts here.
+    let mut sealings: Vec<Element> = Vec::new();
+    for r in [r1, r2] {
+        for old in r.el.child("LDSFacts").into_iter().flat_map(Element::elements) {
+            let fact = facts::lds_fact(old, true, version, report);
+            // both partners carry a copy of the same sealing
+            if sealings.iter().any(|s| facts::same_content(s, &fact)) {
+                report.facts -= 1;
+            } else {
+                sealings.push(fact);
+            }
+        }
+    }
+    facts.extend(sealings);
     if !facts.is_empty() {
         let list = link.ensure_child("Facts", ORDER);
         for mut f in facts {
-            migrate_fact(&mut f, report);
             set_text_in(&mut f, "IsFamily", "true", FACT_ORDER);
             list.push(f);
         }
@@ -1017,9 +1182,51 @@ mod tests {
         assert_eq!(d.child_text("DateDescriptor").as_deref(), Some("About"));
         assert!(d.child("StartDate").is_none() && d.child("Descriptor").is_none());
 
+        // the app's conversion (differential run): a range is a Span, a "Between" range a Range; an open end
+        // does not make it FromOnly/ToOnly
         let mut d = fact_date("<EndDate>1950-01-02T00:00:00</EndDate><IsDateRange>true</IsDateRange>");
         migrate_date(&mut d);
-        assert_eq!(d.child_text("DateDescriptor").as_deref(), Some("ToOnly"));
+        assert_eq!(d.child_text("DateDescriptor").as_deref(), Some("Span"));
+        let mut d = fact_date(
+            "<StartDate>1850-01-02T00:00:00</StartDate><EndDate>1860-03-04T00:00:00</EndDate>\
+             <IsDateRange>true</IsDateRange><StartDateDescriptor>Between</StartDateDescriptor>",
+        );
+        migrate_date(&mut d);
+        assert_eq!(d.child_text("DateDescriptor").as_deref(), Some("Range"));
+        // without a range the descriptor is the enum value, an unknown one is exact
+        let mut d = fact_date("<StartDate>1850-01-02T00:00:00</StartDate><Descriptor>From</Descriptor>");
+        migrate_date(&mut d);
+        assert_eq!(d.child_text("DateDescriptor").as_deref(), Some("FromOnly"));
+        let mut d = fact_date("<StartDate>1850-01-02T00:00:00</StartDate><Descriptor>Between</Descriptor>");
+        migrate_date(&mut d);
+        assert!(d.child("DateDescriptor").is_none());
+        // the children come out in the app's order
+        let mut d = fact_date(
+            "<StartDate>1850-01-02T10:00:00</StartDate><EndDate>1860-03-04T00:00:00</EndDate>\
+             <IsEndBC>true</IsEndBC><CalendarType>JulianCalendar</CalendarType><Descriptor>Before</Descriptor>",
+        );
+        migrate_date(&mut d);
+        let names: Vec<&str> = d.elements().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "StartDay",
+                "StartMonth",
+                "StartYear",
+                "EndDay",
+                "EndMonth",
+                "EndYear",
+                "StartTime",
+                "DateDescriptor",
+                "StartCalendar",
+                "EndCalendar",
+                "EndEra"
+            ]
+        );
+        // a calendar the app does not have is ignored rather than written
+        let mut d = fact_date("<StartDate>1850-01-02T00:00:00</StartDate><CalendarType>MartianCalendar</CalendarType>");
+        migrate_date(&mut d);
+        assert!(d.child("StartCalendar").is_none());
 
         // already current: untouched
         let mut d = fact_date("<StartDay>1</StartDay><StartMonth>2</StartMonth><StartYear>1900</StartYear>");

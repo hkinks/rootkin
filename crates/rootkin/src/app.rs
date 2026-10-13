@@ -894,6 +894,9 @@ fn migration_notice(pkg: &Package) -> Option<String> {
         report.spouse_links + report.parent_links,
         report.media,
     );
+    if !report.dropped.is_empty() {
+        msg.push_str(&format!("\n\nAs the original app does, Rootkin left out: {}.", report.dropped.join("; ")));
+    }
     if !report.warnings.is_empty() {
         msg.push_str(&format!(
             "\n\nSome old details could not be converted and are kept unchanged in the file, but \

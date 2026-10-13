@@ -184,8 +184,9 @@ fn legacy_schema_is_migrated_on_open() {
 
 #[test]
 fn unconvertible_legacy_elements_are_kept_and_flagged() {
-    // `LDSFacts` have no conversion: they stay verbatim and keep `has_legacy_schema` true.
-    let old_xml = "\u{feff}<Family FamilyId=\"x\"><PeopleCollection><Person Id=\"p\"><LDSFacts /></Person>\
+    // A database-backed story cannot be read: it stays verbatim and keeps `has_legacy_schema` true.
+    let old_xml =
+        "\u{feff}<Family FamilyId=\"x\"><PeopleCollection><Person Id=\"p\"><Story><FileId>f1</FileId></Story></Person>\
                    </PeopleCollection></Family>";
     let blob = codec::encode_part(old_xml.as_bytes(), SourceFormat::Family4);
     let pkg = Package::from_bytes(&old_package("family4", &blob)).unwrap();

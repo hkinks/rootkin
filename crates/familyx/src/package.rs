@@ -150,9 +150,9 @@ impl Package {
         protection::document_is_protected(&self.doc)
     }
 
-    /// True if the tree still contains elements of the pre-link schema that
-    /// [`migrate`](crate::migrate) could not convert (`LDSFacts`, database-backed
-    /// `Story`, unconvertible `Relationships`, ...). They are kept verbatim.
+    /// True if the tree still contains elements of the old schema that
+    /// [`migrate`](crate::migrate) could not convert (a database-backed `Story`
+    /// or a story file missing from the package). They are kept verbatim.
     pub fn has_legacy_schema(&self) -> bool {
         migrate::has_legacy_elements(&self.doc)
     }
