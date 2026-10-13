@@ -110,6 +110,41 @@ the user for a password (`ProtectionHandler.IsProtected`, set from `FamilyId`). 
 - Child has `FamilyChildLink` → parents' `SpouseLink` when both parents are a couple.
 - Media: `PackagedFile` (`RelativePath` `Multimedia\x.png`), person `PrimaryImageId`.
 
+## Sources, repositories, citations (derived from the app's classes, not from real files)
+
+No sample file with sources was available. The schema below was read from the vendor's
+decompiled classes (`Source`, `Citation`, `CitationCollection`, `Repository`,
+`SourceRepositoryCitation`, `Fact`, `Person`, `Name`, `ObjectBase`): `XmlSerializer` writes public
+read/write properties in declaration order, base class first, honouring `[XmlElement]`,
+`[XmlAttribute]`, `[XmlIgnore]` and `[DefaultValue]`/`ShouldSerialize*`. It is **unverified
+against a real file**; only the fields listed under "written" are ever written.
+
+- Collections: `SourceCollection/Source*` and `RepositoryCollection/Repository*` directly under `Family`
+  (already in the skeleton, after `PeopleCollection`).
+- Record attributes (`ObjectBase`): `Id`, `LastSaved` (only `ILastSaved` types: `Source`,
+  `Repository`, `Person`), `Creation`. `CustomIds`/`CustomTags` are omitted when empty.
+- `Source` element order: `Title`, `Abbreviation`, `Author`, `Publisher`, `ActualText`, `DataEvents`,
+  `DataNotes`, `ResponsibleAgency`, `Repositories`, `Multimedia`, `Notes`, `LastSavedNotes`, `Privacy`.
+  Null strings are omitted. `Repositories` has no `ShouldSerialize`, so it is always present (possibly
+  empty). Written: `Title`, `Abbreviation`, `Author`, `Publisher`, `Repositories`, `Notes` (plain text, as
+  for person notes). Read-only/preserved: everything else (`ActualText` is a `FlatNote`, structure unknown).
+- `Repositories/SourceRepositoryCitation` (a record): `CallNumber`, `MultimediaType` (enum, omitted when
+  `Blank`), `CustomMultimediaType`, `Repository` (repository id), `Notes`. Written: `CallNumber`, `Repository`.
+- `Repository` order: `Title`, `FullAddress` (an `Address`: `Details`, `Phone`, `Fax`, `Email`, `WWW`;
+  not written), `Notes`, `LastSavedNotes`, `Privacy`. Written: `Title`.
+- `Citation` (a record, no `LastSaved`): `Source` (source id), `Page`, `EventType` (enum), `CustomEventType`,
+  `Role` (enum, serialized from `RoleString`), `CustomRole`, `Url`, `Date` (`CustomDate`), `ActualTexts`,
+  `Quality`, `CustomReference`, `Multimedia`, `Notes`, `Privacy`. Written: `Source`, `Page`.
+  `Quality` enum: `Weak`, `Satisfactory`, `Good`, `Excellent`, `Blank` (default, omitted); it is read
+  but not written, and GEDCOM `QUAY` / Gramps `confidence` are not mapped (the app's mapping is obfuscated).
+- Citations hang on a `CitationCollection` (`Citations/Citation*`, then `Index`, always `0` as written by
+  Rootkin) stored under the owner as: `Person/PersonCitationCollection` (between `FamilySpouseLinks` and
+  `PrimaryImageId`), `Fact/FactCitationCollection` (between `Ages` and `Multimedia`; couple facts included),
+  `Name/NameCitationCollection` (between `Nickname` and `Notes`; not supported). The collection is
+  omitted when it has no citations (`ShouldSerializeCitations`).
+- Deleting a source removes every citation of it; `edit::check` reports citations of missing sources
+  and sources whose repository is missing.
+
 ## Architecture
 
 - `crates/familyx` — `codec` (crypto, all tree variants), `protection` (`FamilyId`), `doc` (lossless XML tree, byte-exact round-trip),
@@ -144,8 +179,15 @@ Mapping (GEDCOM 5.5.1 UTF-8 / Gramps XML 1.7.1):
 - Places are flat strings: written as one `PLAC` / one flat `placeobj`; a Gramps hierarchy is joined
   with commas on import.
 - Living flag: neither format has it; import guesses (no death data and born < 110 years ago).
-- Not carried: photos/media, sources and citations, person notes, addresses, couple status, event
-  roles other than primary, Gramps tags/attributes/repositories, `_CUSTOM` tags, ANSEL encoding.
+- Sources: GEDCOM `0 SOUR` (`TITL`, `ABBR`, `AUTH`, `PUBL`, `NOTE`, `REPO` + `CALN`), `0 REPO` (`NAME`),
+  `SOUR @S1@` + `PAGE` on individuals and events (inline `SOUR text` becomes a source titled with that text,
+  one per distinct text). Gramps `<sources>` (`stitle`, `sauthor`, `spubinfo`, `sabbrev`, `noteref`,
+  `reporef` with `callno`), `<repositories>` (`rname`; type is written as `Unknown`), `<citations>`
+  (`page`, `sourceref`; `confidence` is written as 2 because the DTD requires it and ignored on import) with
+  `citationref` on people and events, source notes as `Source Note` notes. Not carried: `QUAY`/`confidence`,
+  source `DATA`/`TEXT`, citation notes/media/dates, repository addresses, citations on names.
+- Not carried: person notes, addresses, couple status, event
+  roles other than primary, Gramps tags/attributes, `_CUSTOM` tags, ANSEL encoding.
   Unsupported couple facts without two spouses are dropped (reported).
 
 ## Dev
