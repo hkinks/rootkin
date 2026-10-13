@@ -4,7 +4,7 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 
 ## Verify
 - [ ] Open a re-encrypted, unmodified file in the Windows app
-- [ ] Open the generated example (`familyx example`) in the Windows app (new-file skeleton, random `FamilyId`)
+- [ ] Open the generated example (`rootkin-cli example`) in the Windows app (new-file skeleton, random `FamilyId`)
 - [ ] Open a file edited + saved by the Linux editor in the Windows app
 
 ## Editing

@@ -1,4 +1,4 @@
-# familyx
+# Rootkin
 
 A free, cross-platform family tree editor written in Rust. It opens, edits and
 saves `.familyx` files (the format used by Chronoplex *My Family Tree*), so a
@@ -22,7 +22,7 @@ With Nix:
 
 ```sh
 nix-shell
-cargo run --release -p familyx-editor -- path/to/tree.familyx
+cargo run --release -p rootkin -- path/to/tree.familyx
 ```
 
 Elsewhere you need a Rust toolchain plus the usual eframe/wgpu runtime libraries
@@ -31,16 +31,16 @@ Elsewhere you need a Rust toolchain plus the usual eframe/wgpu runtime libraries
 Command-line tool:
 
 ```sh
-cargo run -p familyx-cli -- summary tree.familyx     # list people
-cargo run -p familyx-cli -- dump tree.familyx out.xml  # decoded XML
-cargo run -p familyx-cli -- example new.familyx      # fictional sample tree
+cargo run -p rootkin-cli -- summary tree.familyx       # list people
+cargo run -p rootkin-cli -- dump tree.familyx out.xml  # decoded XML
+cargo run -p rootkin-cli -- example new.familyx        # fictional sample tree
 ```
 
 ## Layout
 
 - `crates/familyx` — format library (codec, lossless XML, model, edits)
-- `crates/familyx-cli` — debugging tool
-- `crates/familyx-editor` — the egui desktop app
+- `crates/rootkin` — the egui desktop app
+- `crates/rootkin-cli` — command-line tool
 - `docs/` — design notes, TODO, UX review
 
 ## Privacy

@@ -8,10 +8,10 @@ fn main() -> eframe::Result {
     let path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Family Tree")
+            .with_title("Rootkin")
             .with_inner_size([1400.0, 900.0])
-            .with_app_id("familyx-editor"),
+            .with_app_id("rootkin"),
         ..Default::default()
     };
-    eframe::run_native("Family Tree", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, path)))))
+    eframe::run_native("Rootkin", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, path)))))
 }

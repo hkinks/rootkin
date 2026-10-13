@@ -1,6 +1,6 @@
 [package]
-name = "familyx-editor"
-description = "Family tree editor for .familyx files"
+name = "rootkin"
+description = "Rootkin: a free family tree editor compatible with .familyx files"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

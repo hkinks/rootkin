@@ -1155,25 +1155,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "familyx-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "familyx",
- "image",
-]
-
-[[package]]
-name = "familyx-editor"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "familyx",
- "image",
- "rfd",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2880,6 +2861,25 @@ dependencies = [
  "wayland-protocols",
  "web-sys",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rootkin"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "familyx",
+ "image",
+ "rfd",
+]
+
+[[package]]
+name = "rootkin-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "familyx",
+ "image",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-# familyx editor — design
+# Rootkin — design
 
 Goal: a pure-Rust (egui/eframe) Linux replacement for Chronoplex My Family Tree
 that opens, edits and saves `.familyx` files which the Windows app can still open.
@@ -27,8 +27,8 @@ that opens, edits and saves `.familyx` files which the Windows app can still ope
 - `crates/familyx` — `codec` (crypto), `doc` (lossless XML tree, byte-exact round-trip),
   `package` (OPC zip, atomic save + `.bak`), `model` (read-only `Tree` snapshot rebuilt
   after each edit), edits mutate the `doc` directly so unknown data survives.
-- `crates/familyx-cli` — `dump`, `pack`, `roundtrip`, `summary`.
-- `crates/familyx-editor` — egui app: people list, tree canvas, person panel.
+- `crates/rootkin-cli` — `dump`, `pack`, `roundtrip`, `summary`, `check`, `example`.
+- `crates/rootkin` — egui app: people list, tree canvas, person panel.
 
 New elements must follow XmlSerializer child order (see `ensure_child`).
 

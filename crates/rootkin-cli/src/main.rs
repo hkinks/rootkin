@@ -1,4 +1,4 @@
-//! Debugging tool for `.familyx` files.
+//! Rootkin command-line tool for `.familyx` files.
 
 mod example;
 
@@ -6,13 +6,13 @@ use anyhow::{bail, Context, Result};
 use familyx::{codec, model::Tree, Package};
 
 const USAGE: &str = "usage:
-  familyx dump <file.familyx> [out.xml]   write decoded tree XML (stdout if no out)
-  familyx pack <file.familyx> <in.xml> <out.familyx>
+  rootkin-cli dump <file.familyx> [out.xml]   write decoded tree XML (stdout if no out)
+  rootkin-cli pack <file.familyx> <in.xml> <out.familyx>
                                           replace the tree XML and save as a new file
-  familyx roundtrip <file.familyx>        verify decode/encode is lossless
-  familyx summary <file.familyx>          list people
-  familyx check <file.familyx>            report dangling references
-  familyx example <out.familyx>           write a fictional example family";
+  rootkin-cli roundtrip <file.familyx>        verify decode/encode is lossless
+  rootkin-cli summary <file.familyx>          list people
+  rootkin-cli check <file.familyx>            report dangling references
+  rootkin-cli example <out.familyx>           write a fictional example family";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();

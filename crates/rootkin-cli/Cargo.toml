@@ -1,11 +1,11 @@
 [package]
-name = "familyx-cli"
+name = "rootkin-cli"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "familyx"
+name = "rootkin-cli"
 path = "src/main.rs"
 
 [dependencies]

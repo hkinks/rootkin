@@ -1,4 +1,4 @@
-//! Tests against the fictional example tree (regenerate: `familyx example <path>`).
+//! Tests against the fictional example tree (regenerate: `rootkin-cli example <path>`).
 
 use familyx::{codec, model::Tree, Package};
 
