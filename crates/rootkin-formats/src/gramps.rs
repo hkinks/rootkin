@@ -1,14 +1,16 @@
 //! Gramps XML 1.7.1 (`.gramps`, gzip-compressed) export and import.
 //!
 //! Places are written flat (the whole place string as one `pname`); on import
-//! a place hierarchy is joined back into `Name, Parent, Country`.
+//! a place hierarchy is joined back into `Name, Parent, Country`. Sources,
+//! repositories and citations (`citationref` on people and events) are mapped;
+//! a citation's confidence is not.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 
 use familyx::doc::{escape, Document, Element};
 use familyx::edit::{self, FactInput};
-use familyx::model::{Fact, Gender, Tree};
+use familyx::model::{Citation, Fact, Gender, Tree};
 use familyx::Package;
 
 use crate::dates::{self, DateValue, Kind};
@@ -101,6 +103,25 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
         }
     }
 
+    // citation id -> number of its `_c<n>` object (citations of unknown sources are left out)
+    let source_numbers: HashMap<&str, usize> =
+        tree.sources.iter().enumerate().map(|(i, s)| (s.id.as_str(), i + 1)).collect();
+    let mut all_citations: Vec<&Citation> = Vec::new();
+    let mut citation_numbers: HashMap<&str, usize> = HashMap::new();
+    let owners =
+        tree.people.iter().flat_map(|p| std::iter::once(&p.citations).chain(p.facts.iter().map(|f| &f.citations)));
+    let couple_facts = fams.iter().flat_map(|f| f.link.iter().flat_map(|l| &l.facts)).map(|f| &f.citations);
+    for c in owners.chain(couple_facts).flatten().filter(|c| source_numbers.contains_key(c.source.as_str())) {
+        all_citations.push(c);
+        citation_numbers.insert(&c.id, all_citations.len());
+    }
+    let citation_refs = |citations: &[Citation], indent: &str| -> String {
+        citations
+            .iter()
+            .filter_map(|c| citation_numbers.get(c.id.as_str()))
+            .map(|n| format!("{indent}<citationref hlink=\"_c{n}\"/>\n"))
+            .collect()
+    };
     let person_handle = |id: &str| tree.people.iter().position(|p| p.id == id).map(|i| format!("_i{}", i + 1));
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -127,6 +148,7 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
             if !e.fact.details.is_empty() {
                 out.push_str(&format!("      <description>{}</description>\n", text(&e.fact.details)));
             }
+            out.push_str(&citation_refs(&e.fact.citations, "      "));
             out.push_str("    </event>\n");
         }
         out.push_str("  </events>\n");
@@ -188,6 +210,7 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
                 out.push_str(&format!("      <parentin hlink=\"_f{}\"/>\n", f + 1));
             }
         }
+        out.push_str(&citation_refs(&person.citations, "      "));
         out.push_str("    </person>\n");
     }
     out.push_str("  </people>\n");
@@ -198,6 +221,54 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
             write_family(&mut out, f + 1, fam, &fam_events[f], &person_handle, change);
         }
         out.push_str("  </families>\n");
+    }
+
+    if !all_citations.is_empty() {
+        out.push_str("  <citations>\n");
+        for (i, c) in all_citations.iter().enumerate() {
+            out.push_str(&format!("    <citation handle=\"_c{0}\" id=\"C{0:04}\" change=\"{change}\">\n", i + 1));
+            if !c.page.is_empty() {
+                out.push_str(&format!("      <page>{}</page>\n", text(&c.page)));
+            }
+            // required by the DTD; 2 is Gramps' "Normal"
+            out.push_str("      <confidence>2</confidence>\n");
+            out.push_str(&format!("      <sourceref hlink=\"_s{}\"/>\n", source_numbers[c.source.as_str()]));
+            out.push_str("    </citation>\n");
+        }
+        out.push_str("  </citations>\n");
+    }
+    // source notes: one Gramps note per source note
+    let mut notes: Vec<String> = Vec::new();
+    if !tree.sources.is_empty() {
+        out.push_str("  <sources>\n");
+        for (i, src) in tree.sources.iter().enumerate() {
+            out.push_str(&format!("    <source handle=\"_s{0}\" id=\"S{0:04}\" change=\"{change}\">\n", i + 1));
+            // DTD order: stitle, sauthor, spubinfo, sabbrev
+            for (tag, value) in [
+                ("stitle", &src.title),
+                ("sauthor", &src.author),
+                ("spubinfo", &src.publisher),
+                ("sabbrev", &src.abbreviation),
+            ] {
+                if !value.is_empty() {
+                    out.push_str(&format!("      <{tag}>{}</{tag}>\n", text(value)));
+                }
+            }
+            for note in &src.notes {
+                notes.push(note.plain_text());
+                out.push_str(&format!("      <noteref hlink=\"_n{}\"/>\n", notes.len()));
+            }
+            if let Some(r) = src.repository.as_deref().and_then(|r| tree.repositories.iter().position(|x| x.id == r)) {
+                let callno = if src.call_number.is_empty() {
+                    String::new()
+                } else {
+                    format!(" callno=\"{}\"", attr(&src.call_number))
+                };
+                out.push_str(&format!("      <reporef hlink=\"_r{}\"{callno} medium=\"Unknown\"/>\n", r + 1));
+            }
+            out.push_str("    </source>\n");
+        }
+        out.push_str("  </sources>\n");
     }
 
     if !places.is_empty() {
@@ -227,6 +298,26 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
             out.push_str("    </object>\n");
         }
         out.push_str("  </objects>\n");
+    }
+    if !tree.repositories.is_empty() {
+        out.push_str("  <repositories>\n");
+        for (i, r) in tree.repositories.iter().enumerate() {
+            out.push_str(&format!("    <repository handle=\"_r{0}\" id=\"R{0:04}\" change=\"{change}\">\n", i + 1));
+            out.push_str(&format!("      <rname>{}</rname>\n      <type>Unknown</type>\n", text(&r.title)));
+            out.push_str("    </repository>\n");
+        }
+        out.push_str("  </repositories>\n");
+    }
+    if !notes.is_empty() {
+        out.push_str("  <notes>\n");
+        for (i, note) in notes.iter().enumerate() {
+            out.push_str(&format!(
+                "    <note handle=\"_n{0}\" id=\"N{0:04}\" type=\"Source Note\" change=\"{change}\">\n      <text>{1}</text>\n    </note>\n",
+                i + 1,
+                text(note)
+            ));
+        }
+        out.push_str("  </notes>\n");
     }
     out.push_str("</database>\n");
 
@@ -273,6 +364,8 @@ struct GEvent {
     date: DateValue,
     place: Option<String>,
     description: String,
+    /// citation handles
+    citations: Vec<String>,
 }
 
 struct GPlace {
@@ -291,6 +384,10 @@ struct Importer<'a> {
     events: HashMap<String, GEvent>,
     places: HashMap<String, GPlace>,
     people: HashMap<String, String>,
+    /// source handle -> source id
+    sources: HashMap<String, String>,
+    /// citation handle -> (source id, page)
+    citations: HashMap<String, (String, String)>,
 }
 
 fn handle(el: &Element) -> String {
@@ -355,6 +452,8 @@ pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportR
         events: HashMap::new(),
         places: HashMap::new(),
         people: HashMap::new(),
+        sources: HashMap::new(),
+        citations: HashMap::new(),
     };
 
     for ev in root.child("events").into_iter().flat_map(|c| c.children_named("event")) {
@@ -366,10 +465,11 @@ pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportR
                 date: parse_date(ev),
                 place: ev.child("place").map(handle),
                 description: text("description"),
+                citations: ev.children_named("citationref").map(handle).collect(),
             },
         );
         for c in ev.elements() {
-            if !["type", "dateval", "daterange", "datespan", "datestr", "place", "description"]
+            if !["type", "dateval", "daterange", "datespan", "datestr", "place", "description", "citationref"]
                 .contains(&c.name.as_str())
             {
                 imp.dropped.add(format!("event.{}", c.name));
@@ -390,6 +490,7 @@ pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportR
         }
     }
 
+    imp.sources_and_citations(root)?;
     let mut report = ImportReport::default();
     for p in root.child("people").into_iter().flat_map(|c| c.children_named("person")) {
         imp.person(p)?;
@@ -400,7 +501,20 @@ pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportR
         report.families += 1;
     }
     for section in root.elements() {
-        if !["header", "events", "people", "families", "places", "objects"].contains(&section.name.as_str()) {
+        if ![
+            "header",
+            "events",
+            "people",
+            "families",
+            "places",
+            "objects",
+            "sources",
+            "citations",
+            "repositories",
+            "notes",
+        ]
+        .contains(&section.name.as_str())
+        {
             let n = section.elements().count();
             if n > 0 {
                 imp.dropped.add_n(section.name.clone(), n);
@@ -444,6 +558,94 @@ impl Importer<'_> {
         }
     }
 
+    /// Create sources (with their repository) and remember citations by handle.
+    fn sources_and_citations(&mut self, root: &Element) -> Result<()> {
+        let mut repos: HashMap<String, String> = HashMap::new();
+        for r in root.child("repositories").into_iter().flat_map(|c| c.children_named("repository")) {
+            let name = r.child_text("rname").unwrap_or_default();
+            let name = if name.trim().is_empty() { "(unnamed repository)".to_string() } else { name };
+            repos.insert(key(&r.attr("handle").unwrap_or_default()), edit::add_repository(&mut self.pkg.doc, &name)?);
+            for c in r.elements().filter(|c| !["rname", "type"].contains(&c.name.as_str())) {
+                self.dropped.add(format!("repository.{}", c.name));
+            }
+        }
+        let notes: HashMap<String, String> = root
+            .child("notes")
+            .into_iter()
+            .flat_map(|c| c.children_named("note"))
+            .map(|n| (key(&n.attr("handle").unwrap_or_default()), n.child_text("text").unwrap_or_default()))
+            .collect();
+        let mut used_notes = HashSet::new();
+        for s in root.child("sources").into_iter().flat_map(|c| c.children_named("source")) {
+            let mut input = edit::SourceInput::default();
+            let mut note_texts = Vec::new();
+            for c in s.elements() {
+                match c.name.as_str() {
+                    "stitle" => input.title = c.text().trim().to_string(),
+                    "sauthor" => input.author = c.text().trim().to_string(),
+                    "spubinfo" => input.publisher = c.text().trim().to_string(),
+                    "sabbrev" => input.abbreviation = c.text().trim().to_string(),
+                    "noteref" => {
+                        used_notes.insert(handle(c));
+                        note_texts.extend(notes.get(&handle(c)).cloned());
+                    }
+                    "reporef" => match repos.get(&handle(c)) {
+                        Some(id) if input.repository.is_none() => {
+                            input.repository = Some(id.clone());
+                            input.call_number = c.attr("callno").map(|v| v.into_owned()).unwrap_or_default();
+                        }
+                        Some(_) => self.dropped.add("source.reporef beyond the first"),
+                        None => self.dropped.add("source.reporef to unknown repository"),
+                    },
+                    other => self.dropped.add(format!("source.{other}")),
+                }
+            }
+            input.note = note_texts.into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join(
+                "
+
+",
+            );
+            let id = edit::add_source(&mut self.pkg.doc, &input)?;
+            self.sources.insert(key(&s.attr("handle").unwrap_or_default()), id);
+        }
+        // only notes on sources are carried over
+        let unused = notes.len().saturating_sub(used_notes.len());
+        if unused > 0 {
+            self.dropped.add_n("notes", unused);
+        }
+        for c in root.child("citations").into_iter().flat_map(|c| c.children_named("citation")) {
+            let source = c.child("sourceref").and_then(|r| self.sources.get(&handle(r))).cloned();
+            let Some(source) = source else {
+                self.dropped.add("citation without a known source");
+                continue;
+            };
+            for child in c.elements().filter(|e| !["page", "sourceref", "confidence"].contains(&e.name.as_str())) {
+                self.dropped.add(format!("citation.{}", child.name));
+            }
+            self.citations
+                .insert(key(&c.attr("handle").unwrap_or_default()), (source, c.child_text("page").unwrap_or_default()));
+        }
+        Ok(())
+    }
+
+    /// Cite the citations with these handles on `owner` (a person or fact id).
+    fn cite(&mut self, owner: &str, handles: &[String]) {
+        for h in handles {
+            match self.citations.get(&key(h)).cloned() {
+                Some((source, page)) => {
+                    if let Err(e) = edit::add_citation(&mut self.pkg.doc, owner, &source, &page) {
+                        self.warnings.push(format!("citation: {e}"));
+                    }
+                }
+                None => self.dropped.add("citationref to an unknown citation"),
+            }
+        }
+    }
+
+    fn event_citations(&self, event_handle: &str) -> Vec<String> {
+        self.events.get(&key(event_handle)).map(|e| e.citations.clone()).unwrap_or_default()
+    }
+
     fn fact_for(&self, event_handle: &str) -> Option<(String, FactInput)> {
         let ev = self.events.get(&key(event_handle))?;
         let known = GRAMPS_TYPES.iter().find(|(_, ty)| ty.eq_ignore_ascii_case(ev.ty.trim())).map(|(t, _)| *t);
@@ -479,6 +681,7 @@ impl Importer<'_> {
         }
 
         let (mut dead, mut birth_year) = (false, None);
+        let mut person_citations = Vec::new();
         for c in p.elements() {
             match c.name.as_str() {
                 "eventref" => {
@@ -495,16 +698,20 @@ impl Importer<'_> {
                         birth_year = birth_year.or(input.date.year);
                     }
                     dead |= matches!(tag.as_str(), "DEAT" | "BURI" | "CREM");
-                    edit::add_fact(&mut self.pkg.doc, &id, &tag, &input)?;
+                    let fact = edit::add_fact(&mut self.pkg.doc, &id, &tag, &input)?;
+                    let cites = self.event_citations(&handle(c));
+                    self.cite(&fact, &cites);
                 }
                 "objref" => match self.objects.get(&handle(c)).cloned() {
                     Some(file) => crate::import_photo(&mut self.pkg, &id, &file, self.resolve, &mut self.dropped),
                     None => self.dropped.add("person.objref to unknown object"),
                 },
+                "citationref" => person_citations.push(handle(c)),
                 "gender" | "name" | "childof" | "parentin" => {}
                 other => self.dropped.add(format!("person.{other}")),
             }
         }
+        self.cite(&id, &person_citations);
         edit::set_living(&mut self.pkg.doc, &id, vocab::guess_living(dead, birth_year))?;
         Ok(())
     }
@@ -546,11 +753,13 @@ impl Importer<'_> {
                 "eventref" => {
                     let Some((tag, input)) = self.fact_for(&handle(c)) else { continue };
                     match &link {
-                        Some(link) => {
-                            if let Err(e) = edit::add_couple_fact(&mut self.pkg.doc, link, &tag, &input) {
-                                self.warnings.push(format!("family: {tag}: {e}"));
+                        Some(link) => match edit::add_couple_fact(&mut self.pkg.doc, link, &tag, &input) {
+                            Ok(fact) => {
+                                let cites = self.event_citations(&handle(c));
+                                self.cite(&fact, &cites);
                             }
-                        }
+                            Err(e) => self.warnings.push(format!("family: {tag}: {e}")),
+                        },
                         None => self.dropped.add(format!("family event {tag} without two spouses")),
                     }
                 }

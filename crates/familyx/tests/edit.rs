@@ -227,8 +227,15 @@ fn photos_can_be_shared_switched_and_removed() {
     assert!(Tree::from_doc(&pkg.doc).person(&leo).unwrap().primary_image.is_none());
 }
 
-fn serialized(pkg: &Package) -> String {
-    String::from_utf8_lossy(&pkg.doc.to_bytes()).into_owned()
+/// Does the record with this id have a direct child element `name`?
+fn has_child(pkg: &Package, id: &str, name: &str) -> bool {
+    fn find<'a>(el: &'a familyx::doc::Element, id: &str) -> Option<&'a familyx::doc::Element> {
+        if el.attr("Id").as_deref() == Some(id) && (el.name == "Person" || el.name == "Fact") {
+            return Some(el);
+        }
+        el.elements().find_map(|c| find(c, id))
+    }
+    find(&pkg.doc.root, id).unwrap().child(name).is_some()
 }
 
 fn names_of(el: &familyx::doc::Element) -> Vec<&str> {
@@ -361,12 +368,12 @@ fn updating_and_deleting_sources_and_citations() {
     let p = tree.person(&erik).unwrap();
     assert!(p.citations.is_empty());
     assert_eq!(p.fact("BIRT").unwrap().citations.len(), 1);
-    assert!(!serialized(&pkg).contains("PersonCitationCollection"));
+    assert!(!has_child(&pkg, &erik, "PersonCitationCollection"));
     assert_eq!(edit::check(&pkg.doc), Vec::<String>::new());
 
     edit::remove_citation(&mut pkg.doc, &c3).unwrap();
     assert!(Tree::from_doc(&pkg.doc).person(&erik).unwrap().fact("BIRT").unwrap().citations.is_empty());
-    assert!(!serialized(&pkg).contains("FactCitationCollection"));
+    assert!(!has_child(&pkg, &birth, "FactCitationCollection"));
     assert!(edit::remove_citation(&mut pkg.doc, &c3).is_err());
     assert!(edit::add_citation(&mut pkg.doc, &birth, "nope", "").is_err());
     assert!(edit::delete_source(&mut pkg.doc, "nope").is_err());

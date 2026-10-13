@@ -2,13 +2,14 @@
 //!
 //! Mapping notes (see `docs/design.md`): attributes (`OCCU`, `EDUC`, ...) keep
 //! their text in the fact's details; events keep it as a `NOTE`. Photos are
-//! `OBJE` records pointing at files; sources, notes on people and `_CUSTOM`
-//! tags are not imported.
+//! `OBJE` records pointing at files; sources and repositories are `SOUR` and
+//! `REPO` records, cited with `SOUR` / `PAGE` on people and facts. Notes on people
+//! and `_CUSTOM` tags are not imported.
 
 use std::collections::{HashMap, HashSet};
 
 use familyx::edit::{self, FactInput};
-use familyx::model::{Fact, Gender, Tree};
+use familyx::model::{Citation, Fact, Gender, Tree};
 use familyx::Package;
 
 use crate::dates::{self, DateValue};
@@ -94,6 +95,8 @@ fn split_chunks(s: &str, max: usize) -> Vec<&str> {
 pub(crate) fn export(pkg: &Package, v7: bool, media: &ExportMedia) -> Vec<u8> {
     let tree = Tree::from_doc(&pkg.doc);
     let fams = families::build(&tree);
+    // source id -> number of its `@S<n>@` record
+    let src: HashMap<&str, usize> = tree.sources.iter().enumerate().map(|(i, s)| (s.id.as_str(), i + 1)).collect();
     let indi_xref = |id: &str| tree.people.iter().position(|p| p.id == id).map(|i| format!("I{}", i + 1));
 
     let mut w = Writer { out: String::new(), v7 };
@@ -132,8 +135,9 @@ pub(crate) fn export(pkg: &Package, v7: bool, media: &ExportMedia) -> Vec<u8> {
             Gender::Other => w.raw(1, "SEX", "X"),
             Gender::Unknown => {}
         }
+        write_citations(&mut w, 1, &person.citations, &src);
         for fact in &person.facts {
-            write_fact(&mut w, fact, false);
+            write_fact(&mut w, fact, false, &src);
         }
         // the primary photo first: readers commonly treat it as the portrait
         let photos = person
@@ -168,7 +172,7 @@ pub(crate) fn export(pkg: &Package, v7: bool, media: &ExportMedia) -> Vec<u8> {
     }
 
     for (f, fam) in fams.iter().enumerate() {
-        write_family(&mut w, f + 1, fam, &indi_xref);
+        write_family(&mut w, f + 1, fam, &indi_xref, &src);
     }
     for id in &media.order {
         let r = &media.refs[id];
@@ -185,11 +189,39 @@ pub(crate) fn export(pkg: &Package, v7: bool, media: &ExportMedia) -> Vec<u8> {
             w.line(2, "TITL", &r.title);
         }
     }
+    for (i, s) in tree.sources.iter().enumerate() {
+        w.record(&format!("S{}", i + 1), "SOUR");
+        for (tag, value) in [("TITL", &s.title), ("ABBR", &s.abbreviation), ("AUTH", &s.author), ("PUBL", &s.publisher)]
+        {
+            if !value.is_empty() {
+                w.line(1, tag, value);
+            }
+        }
+        if let Some(r) = s.repository.as_deref().and_then(|r| tree.repositories.iter().position(|x| x.id == r)) {
+            w.pointer(1, "REPO", &format!("R{}", r + 1));
+            if !s.call_number.is_empty() {
+                w.line(2, "CALN", &s.call_number);
+            }
+        }
+        for note in &s.notes {
+            w.line(1, "NOTE", &note.plain_text());
+        }
+    }
+    for (i, r) in tree.repositories.iter().enumerate() {
+        w.record(&format!("R{}", i + 1), "REPO");
+        w.line(1, "NAME", &r.title);
+    }
     w.raw(0, "TRLR", "");
     w.out.into_bytes()
 }
 
-fn write_family(w: &mut Writer, number: usize, fam: &Fam, indi_xref: &dyn Fn(&str) -> Option<String>) {
+fn write_family(
+    w: &mut Writer,
+    number: usize,
+    fam: &Fam,
+    indi_xref: &dyn Fn(&str) -> Option<String>,
+    src: &HashMap<&str, usize>,
+) {
     w.record(&format!("F{number}"), "FAM");
     for (tag, id) in [("HUSB", fam.husb), ("WIFE", fam.wife)] {
         if let Some(x) = id.and_then(indi_xref) {
@@ -202,7 +234,7 @@ fn write_family(w: &mut Writer, number: usize, fam: &Fam, indi_xref: &dyn Fn(&st
         }
     }
     for fact in fam.link.iter().flat_map(|l| &l.facts) {
-        write_fact(w, fact, true);
+        write_fact(w, fact, true, src);
     }
 }
 
@@ -239,7 +271,18 @@ fn write_name(w: &mut Writer, name: &familyx::model::Name, alternate: bool) {
     }
 }
 
-fn write_fact(w: &mut Writer, fact: &Fact, in_family: bool) {
+/// `SOUR` pointers with `PAGE` at `level`; citations of unknown sources are skipped.
+fn write_citations(w: &mut Writer, level: usize, citations: &[Citation], src: &HashMap<&str, usize>) {
+    for c in citations {
+        let Some(n) = src.get(c.source.as_str()) else { continue };
+        w.pointer(level, "SOUR", &format!("S{n}"));
+        if !c.page.is_empty() {
+            w.line(level + 1, "PAGE", &c.page);
+        }
+    }
+}
+
+fn write_fact(w: &mut Writer, fact: &Fact, in_family: bool, src: &HashMap<&str, usize>) {
     let tag = fact.tag.as_str();
     let is_event = if in_family { FAM_EVENTS.contains(&tag) } else { INDI_EVENTS.contains(&tag) };
     let is_attribute = !in_family && INDI_ATTRIBUTES.contains(&tag);
@@ -262,6 +305,7 @@ fn write_fact(w: &mut Writer, fact: &Fact, in_family: bool) {
     if !is_attribute && !fact.details.is_empty() {
         w.line(2, "NOTE", &fact.details);
     }
+    write_citations(w, 2, &fact.citations, src);
 }
 
 // ---------------------------------------------------------------- import
@@ -420,6 +464,10 @@ struct Importer<'a> {
     dropped: Dropped,
     warnings: Vec<String>,
     notes: HashMap<String, String>,
+    /// SOUR xref -> source id
+    sources: HashMap<String, String>,
+    /// text of inline (pointer-less) `SOUR` lines -> source id
+    inline_sources: HashMap<String, String>,
     /// INDI xref -> person id
     people: HashMap<String, String>,
     /// (FAM xref, INDI xref) -> PEDI value
@@ -444,6 +492,8 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
         dropped: Dropped::default(),
         warnings,
         notes: HashMap::new(),
+        sources: HashMap::new(),
+        inline_sources: HashMap::new(),
         people: HashMap::new(),
         pedi: HashMap::new(),
         adopted: HashSet::new(),
@@ -468,6 +518,7 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
             _ => {}
         }
     }
+    imp.sources_and_repositories(&roots)?;
     let mut report = ImportReport::default();
     for n in roots.iter().filter(|n| n.tag == "INDI") {
         imp.indi(n)?;
@@ -479,7 +530,7 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
     }
     for n in &roots {
         match n.tag.as_str() {
-            "HEAD" | "TRLR" | "SUBM" | "SUBN" | "INDI" | "FAM" | "NOTE" | "OBJE" => {}
+            "HEAD" | "TRLR" | "SUBM" | "SUBN" | "INDI" | "FAM" | "NOTE" | "OBJE" | "SOUR" | "REPO" => {}
             other => imp.dropped.add(format!("{other} record")),
         }
     }
@@ -526,6 +577,8 @@ impl Importer<'_> {
                 }
                 "TYPE" => ty = c.value.trim().to_string(),
                 "NOTE" => notes.push(self.note_text(c)),
+                // cited by the caller once the fact exists
+                "SOUR" => {}
                 t if SILENT.contains(&t) => {}
                 t => self.dropped.add(format!("{path}.{t}")),
             }
@@ -536,6 +589,95 @@ impl Importer<'_> {
             [Some(ty), value].into_iter().flatten().chain(notes).filter(|s| !s.is_empty()).collect();
         input.details = parts.join("; ");
         input
+    }
+
+    /// Create the sources and repositories of `SOUR` / `REPO` records.
+    fn sources_and_repositories(&mut self, roots: &[Node]) -> Result<()> {
+        let mut repos: HashMap<&str, String> = HashMap::new();
+        for n in roots.iter().filter(|n| n.tag == "REPO") {
+            let Some(x) = &n.xref else { continue };
+            let name = n.child_value("NAME").unwrap_or("(unnamed repository)");
+            repos.insert(x, edit::add_repository(&mut self.pkg.doc, name)?);
+            self.drop_children("REPO", n, &["NAME"]);
+        }
+        for n in roots.iter().filter(|n| n.tag == "SOUR") {
+            let Some(x) = &n.xref else { continue };
+            let mut input = edit::SourceInput::default();
+            let mut notes = Vec::new();
+            for c in &n.children {
+                let v = c.value.trim().to_string();
+                match c.tag.as_str() {
+                    "TITL" => input.title = v,
+                    "ABBR" => input.abbreviation = v,
+                    "AUTH" => input.author = v,
+                    "PUBL" => input.publisher = v,
+                    "NOTE" => notes.push(self.note_text(c)),
+                    "REPO" => match repos.get(v.as_str()) {
+                        Some(id) => {
+                            input.repository = Some(id.clone());
+                            input.call_number = c.child_value("CALN").unwrap_or_default().to_string();
+                            self.drop_children("SOUR.REPO", c, &["CALN"]);
+                        }
+                        None => self.dropped.add("SOUR.REPO that is not a repository record"),
+                    },
+                    t if SILENT.contains(&t) => {}
+                    t => self.dropped.add(format!("SOUR.{t}")),
+                }
+            }
+            input.note = notes.into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join(
+                "
+
+",
+            );
+            self.sources.insert(x.clone(), edit::add_source(&mut self.pkg.doc, &input)?);
+        }
+        Ok(())
+    }
+
+    /// Cite the sources named by the `SOUR` children of `n` on `owner`.
+    fn cite(&mut self, path: &str, owner: &str, n: &Node) -> Result<()> {
+        for c in n.children_named("SOUR") {
+            self.cite_line(path, owner, c)?;
+        }
+        Ok(())
+    }
+
+    /// One `SOUR` line: a pointer to a source record, or inline source text.
+    fn cite_line(&mut self, path: &str, owner: &str, c: &Node) -> Result<()> {
+        let path = format!("{path}.SOUR");
+        let source = if is_pointer(&c.value) {
+            let ptr = c.value.trim();
+            if ptr.eq_ignore_ascii_case("@VOID@") {
+                return Ok(());
+            }
+            match self.sources.get(ptr) {
+                Some(id) => id.clone(),
+                None => {
+                    self.warnings.push(format!("{path} points to missing source {ptr}"));
+                    return Ok(());
+                }
+            }
+        } else {
+            // a source described in place: one anonymous source per distinct text
+            let text = c.value.trim().to_string();
+            if text.is_empty() {
+                self.dropped.add(format!("{path} without a source"));
+                return Ok(());
+            }
+            match self.inline_sources.get(&text) {
+                Some(id) => id.clone(),
+                None => {
+                    let input = edit::SourceInput { title: text.clone(), ..Default::default() };
+                    let id = edit::add_source(&mut self.pkg.doc, &input)?;
+                    self.inline_sources.insert(text, id.clone());
+                    id
+                }
+            }
+        };
+        let page = c.child_value("PAGE").unwrap_or_default();
+        edit::add_citation(&mut self.pkg.doc, owner, &source, page)?;
+        self.drop_children(&path, c, &["PAGE"]);
+        Ok(())
     }
 
     fn indi(&mut self, n: &Node) -> Result<()> {
@@ -567,12 +709,15 @@ impl Importer<'_> {
                     birth_year = birth_year.or(input.date.year);
                 }
                 dead |= matches!(tag, "DEAT" | "BURI" | "CREM");
-                edit::add_fact(&mut self.pkg.doc, &id, tag, &input)?;
+                let fact = edit::add_fact(&mut self.pkg.doc, &id, tag, &input)?;
+                self.cite(&format!("INDI.{tag}"), &fact, c)?;
                 if let (Some(xref), "ADOP") = (&n.xref, tag) {
                     for famc in c.children_named("FAMC") {
                         self.adopted.insert((famc.value.trim().to_string(), xref.clone()));
                     }
                 }
+            } else if tag == "SOUR" {
+                self.cite_line("INDI", &id, c)?;
             } else if tag == "OBJE" {
                 // a pointer to an OBJE record, or an inline FILE
                 let file = if is_pointer(&c.value) {
@@ -656,11 +801,14 @@ impl Importer<'_> {
             if FAM_EVENTS.contains(&tag) {
                 let input = self.fact_input(&format!("FAM.{tag}"), c, false);
                 match &link {
-                    Some(link) => {
-                        if let Err(e) = edit::add_couple_fact(&mut self.pkg.doc, link, tag, &input) {
-                            self.warnings.push(format!("FAM {label}: {tag}: {e}"));
+                    Some(link) => match edit::add_couple_fact(&mut self.pkg.doc, link, tag, &input) {
+                        Ok(fact) => {
+                            if let Err(e) = self.cite(&format!("FAM.{tag}"), &fact, c) {
+                                self.warnings.push(format!("FAM {label}: {tag}: {e}"));
+                            }
                         }
-                    }
+                        Err(e) => self.warnings.push(format!("FAM {label}: {tag}: {e}")),
+                    },
                     None => self.dropped.add(format!("FAM.{tag} without two spouses")),
                 }
             } else if !matches!(tag, "HUSB" | "WIFE" | "CHIL") && !SILENT.contains(&tag) {
