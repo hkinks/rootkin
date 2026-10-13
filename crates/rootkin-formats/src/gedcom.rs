@@ -117,6 +117,8 @@ pub fn export(pkg: &Package) -> Vec<u8> {
         match person.gender {
             Gender::Male => w.raw(1, "SEX", "M"),
             Gender::Female => w.raw(1, "SEX", "F"),
+            // GEDCOM 7's "X"; 5.5.1 readers commonly accept it
+            Gender::Other => w.raw(1, "SEX", "X"),
             Gender::Unknown => {}
         }
         for fact in &person.facts {
@@ -494,6 +496,7 @@ impl Importer {
         let gender = match n.child_value("SEX").and_then(|s| s.chars().next()) {
             Some('M' | 'm') => Gender::Male,
             Some('F' | 'f') => Gender::Female,
+            Some('X' | 'x') => Gender::Other,
             _ => Gender::Unknown,
         };
         let id = edit::add_person(&mut self.pkg.doc, &given, &surname, gender);

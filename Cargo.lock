@@ -2968,6 +2968,7 @@ dependencies = [
  "image",
  "open",
  "rfd",
+ "rootkin-formats",
 ]
 
 [[package]]

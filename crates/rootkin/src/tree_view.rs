@@ -62,7 +62,7 @@ pub fn gender_symbol(g: Gender) -> &'static str {
     match g {
         Gender::Male => "♂",
         Gender::Female => "♀",
-        Gender::Other => "⚥",
+        Gender::Other => "*",
         Gender::Unknown => "?",
     }
 }
@@ -251,21 +251,21 @@ impl TreeView {
         }
         clip.text(c + Vec2::new(0.0, 12.0 * z), Align2::CENTER_CENTER, sub.trim(), font(13.0), Color32::from_gray(225));
 
-        // more relatives beyond the view
-        let marker = |at: Pos2, text: &str| {
-            painter.text(
-                at,
-                Align2::CENTER_CENTER,
-                text,
-                FontId::proportional(12.0 * z.max(0.6)),
-                Color32::from_gray(200),
-            );
+        // more relatives beyond the view: small triangles above/below the box
+        let tri = |tip: Pos2, up: bool| {
+            let (w, h) = (6.0 * z.max(0.6), 6.0 * z.max(0.6));
+            let base_y = if up { tip.y + h } else { tip.y - h };
+            painter.add(Shape::convex_polygon(
+                vec![tip, Pos2::new(tip.x - w, base_y), Pos2::new(tip.x + w, base_y)],
+                Color32::from_gray(190),
+                Stroke::NONE,
+            ));
         };
         if node.more_up {
-            marker(rect.center_top() - Vec2::new(0.0, 8.0 * z), "▲");
+            tri(rect.center_top() - Vec2::new(0.0, 12.0 * z.max(0.6)), true);
         }
         if node.more_down {
-            marker(rect.center_bottom() + Vec2::new(0.0, 8.0 * z), "▼");
+            tri(rect.center_bottom() + Vec2::new(0.0, 12.0 * z.max(0.6)), false);
         }
     }
 
@@ -303,33 +303,35 @@ impl TreeView {
                     if ui.button(" − ").on_hover_text("Zoom out").clicked() {
                         self.zoom_by(0.8, canvas.center(), canvas);
                     }
-                    ui.separator();
-                    let mut gens = |ui: &mut egui::Ui, label: &str, value: &mut u32| {
-                        let before = *value;
-                        ui.add(egui::DragValue::new(value).range(0..=8)).on_hover_text("Number of generations shown");
-                        ui.label(label);
-                        if *value != before {
-                            self.auto_fit = true;
-                        }
-                    };
-                    let mut s = self.settings;
-                    gens(ui, "Descendants", &mut s.descendants);
-                    gens(ui, "Ancestors", &mut s.ancestors);
-                    self.settings = s;
                 });
             });
         });
-        ui.painter().text(
-            canvas.left_bottom() + Vec2::new(10.0, -10.0),
-            Align2::LEFT_BOTTOM,
-            "Click a person to show their family · drag to move · scroll to zoom · arrow keys: ↑ parent ↓ child ← → siblings",
-            FontId::proportional(13.0),
-            ui.visuals().weak_text_color(),
+        let footer = Rect::from_min_max(
+            canvas.left_bottom() - Vec2::new(-8.0, 34.0),
+            canvas.right_bottom() - Vec2::new(8.0, 4.0),
         );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(footer), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut s = self.settings;
+                let mut gens = |ui: &mut egui::Ui, label: &str, value: &mut u32| {
+                    let before = *value;
+                    ui.add(egui::DragValue::new(value).range(0..=8)).on_hover_text("Number of generations shown");
+                    ui.label(label);
+                    if *value != before {
+                        self.auto_fit = true;
+                    }
+                };
+                gens(ui, "Descendants", &mut s.descendants);
+                gens(ui, "Ancestors", &mut s.ancestors);
+                self.settings = s;
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.weak("Click a person to show their family · drag to move · scroll to zoom · arrow keys move between relatives");
+                });
+            });
+        });
         action
     }
 }
-
 /// Pan and zoom that fit the layout into the canvas.
 fn fit(layout: &Layout, canvas: Rect) -> (Vec2, f32) {
     let bounds = layout.bounds().expand(30.0);

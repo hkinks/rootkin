@@ -138,7 +138,7 @@ pub fn export(pkg: &Package) -> Result<Vec<u8>> {
         let gender = match person.gender {
             Gender::Male => "M",
             Gender::Female => "F",
-            Gender::Unknown => "U",
+            Gender::Other | Gender::Unknown => "U",
         };
         out.push_str(&format!("      <gender>{gender}</gender>\n"));
         let primary = person.primary_name();

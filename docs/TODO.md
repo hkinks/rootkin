@@ -37,7 +37,7 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
 - [x] Gramps XML (`.gramps`, gzip) export: people, events, places, families with handles
 - [x] Gramps XML import
 - [x] CLI: `rootkin-cli export tree.familyx out.ged|out.gramps`, `rootkin-cli import in.ged|in.gramps out.familyx`
-- [ ] Editor: File → Import… (opens as new unsaved tree), File → Export…
+- [x] Editor: File → Import… (opens as new unsaved tree), File → Export…
 - [x] Tests: example tree → GEDCOM → familyx and → Gramps → familyx preserve people/links/facts;
       a hand-written GEDCOM with unsupported tags
 - [ ] Later: photos in export (OBJE / Gramps objects), sources/citations, GEDCOM 7

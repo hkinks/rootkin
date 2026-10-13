@@ -293,9 +293,9 @@ impl App {
                     ui.heading(person.display_name());
                     ui.label(format!("{} {}", gender_symbol(person.gender), person.lifespan()));
                     if self.tree.home_person.as_deref() == Some(person.id.as_str()) {
-                        ui.weak("⌂ Home person (opens first)");
+                        ui.weak("Home person (the tree opens here)");
                     } else if ui
-                        .small_button("⌂ Make home person")
+                        .small_button("Make home person")
                         .on_hover_text("Open the tree at this person")
                         .clicked()
                     {
@@ -550,13 +550,13 @@ impl App {
                         }
                         if count > 1 {
                             if ui
-                                .add_enabled(i + 1 < count, egui::Button::new("↓"))
+                                .add_enabled(i + 1 < count, egui::Button::new("⬇"))
                                 .on_hover_text("Move down")
                                 .clicked()
                             {
                                 *action = Some(Action::MoveSpouse(other.clone(), 1));
                             }
-                            if ui.add_enabled(i > 0, egui::Button::new("↑")).on_hover_text("Move up").clicked() {
+                            if ui.add_enabled(i > 0, egui::Button::new("⬆")).on_hover_text("Move up").clicked() {
                                 *action = Some(Action::MoveSpouse(other.clone(), -1));
                             }
                         }
@@ -625,10 +625,10 @@ impl App {
                             Some(Action::Unlink(Unlink::Parent { child: kid.to_string(), parent: person.id.clone() }));
                     }
                     if n > 1 {
-                        if ui.add_enabled(i + 1 < n, egui::Button::new("↓")).on_hover_text("Move down").clicked() {
+                        if ui.add_enabled(i + 1 < n, egui::Button::new("⬇")).on_hover_text("Move down").clicked() {
                             *action = Some(Action::MoveChild(kid.to_string(), 1));
                         }
-                        if ui.add_enabled(i > 0, egui::Button::new("↑")).on_hover_text("Move up").clicked() {
+                        if ui.add_enabled(i > 0, egui::Button::new("⬆")).on_hover_text("Move up").clicked() {
                             *action = Some(Action::MoveChild(kid.to_string(), -1));
                         }
                     }
