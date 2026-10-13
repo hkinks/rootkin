@@ -152,3 +152,11 @@ Mapping (GEDCOM 5.5.1 UTF-8 / Gramps XML 1.7.1):
 
 `nix-shell` provides the toolchain and runtime libs (vulkan, wayland, GL).
 The decoded XML contains personal data: never commit `*.xml` dumps.
+
+## Photos in GEDCOM / Gramps
+
+Exports copy each photo into `<export name>_media/` and reference it relatively
+(GEDCOM `0 @O1@ OBJE` / `1 FILE`, Gramps `<objects><object><file src>`); the
+primary photo is referenced first. Imports resolve references relative to the
+imported file, then as given, then by bare file name next to it; PNG and JPEG
+are attached, other types are reported as dropped.

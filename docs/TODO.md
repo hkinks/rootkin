@@ -38,7 +38,9 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
 - [x] Editor: File → Import… (opens as new unsaved tree), File → Export…
 - [x] Tests: example tree → GEDCOM → familyx and → Gramps → familyx preserve people/links/facts;
       a hand-written GEDCOM with unsupported tags
-- [ ] Later: photos in export (OBJE / Gramps objects), sources/citations, GEDCOM 7
+- [x] Photos in export/import (GEDCOM `OBJE`, Gramps `objects`; files in `<name>_media/`)
+- [x] GEDCOM 7.0 export (import already tolerant of 7.0)
+- [ ] Sources/citations in import/export (needs the app's source schema from real samples)
 
 ## Verify
 - [ ] Open a re-encrypted, unmodified file in the Windows app

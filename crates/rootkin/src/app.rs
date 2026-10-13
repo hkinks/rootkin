@@ -540,11 +540,19 @@ impl App {
                 }
                 ui.add_enabled_ui(has, |ui| {
                     ui.menu_button("Export", |ui| {
-                        if ui.button("GEDCOM (.ged)…").clicked() {
-                            self.export_format("ged");
+                        use crate::formats::Format;
+                        if ui
+                            .button("GEDCOM 5.5.1 (.ged)…")
+                            .on_hover_text("Readable by almost every genealogy program")
+                            .clicked()
+                        {
+                            self.export_format("ged", Format::Gedcom);
+                        }
+                        if ui.button("GEDCOM 7 (.ged)…").clicked() {
+                            self.export_format("ged", Format::Gedcom7);
                         }
                         if ui.button("Gramps (.gramps)…").clicked() {
-                            self.export_format("gramps");
+                            self.export_format("gramps", Format::Gramps);
                         }
                         ui.separator();
                         if ui.button("Tree as image (SVG)…").clicked() {
@@ -873,7 +881,7 @@ impl App {
         }
     }
 
-    fn export_format(&mut self, extension: &str) {
+    fn export_format(&mut self, extension: &str, format: crate::formats::Format) {
         self.flush_form();
         let Some(pkg) = &self.pkg else { return };
         let stem = self.path.as_ref().and_then(|p| p.file_stem()).map_or("family".into(), |s| s.to_string_lossy());
@@ -884,8 +892,10 @@ impl App {
         else {
             return;
         };
-        match crate::formats::export(pkg, &path) {
-            Ok(()) => self.toasts.info(format!("Exported {}", file_name(&path))),
+        match crate::formats::export(pkg, &path, format) {
+            Ok(()) => {
+                self.toasts.info(format!("Exported {} (photos are in the _media folder next to it)", file_name(&path)))
+            }
             Err(e) => self.toasts.error(format!("Export failed: {e}")),
         }
     }

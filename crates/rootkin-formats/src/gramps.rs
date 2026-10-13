@@ -61,7 +61,7 @@ struct Event<'a> {
     fact: &'a Fact,
 }
 
-pub fn export(pkg: &Package) -> Result<Vec<u8>> {
+pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8>> {
     let tree = Tree::from_doc(&pkg.doc);
     let fams = families::build(&tree);
     let change = chrono::Utc::now().timestamp();
@@ -169,6 +169,15 @@ pub fn export(pkg: &Package) -> Result<Vec<u8>> {
         for e in &person_events[i] {
             out.push_str(&format!("      <eventref hlink=\"_e{}\" role=\"Primary\"/>\n", e + 1));
         }
+        let photos = person
+            .primary_image
+            .iter()
+            .chain(person.media.iter().filter(|m| Some(*m) != person.primary_image.as_ref()));
+        for m in photos {
+            if let Some(r) = media.refs.get(m) {
+                out.push_str(&format!("      <objref hlink=\"_o{}\"/>\n", r.number));
+            }
+        }
         for (f, fam) in fams.iter().enumerate() {
             if fam.children.iter().any(|c| c.id == person.id) {
                 out.push_str(&format!("      <childof hlink=\"_f{}\"/>\n", f + 1));
@@ -203,6 +212,21 @@ pub fn export(pkg: &Package) -> Result<Vec<u8>> {
             out.push_str("    </placeobj>\n");
         }
         out.push_str("  </places>\n");
+    }
+    if !media.order.is_empty() {
+        out.push_str("  <objects>\n");
+        for id in &media.order {
+            let r = &media.refs[id];
+            let mime = if r.ext == "png" { "image/png" } else { "image/jpeg" };
+            out.push_str(&format!("    <object handle=\"_o{0}\" id=\"O{0:04}\" change=\"{change}\">\n", r.number));
+            out.push_str(&format!(
+                "      <file src=\"{}\" mime=\"{mime}\" description=\"{}\"/>\n",
+                attr(&r.path),
+                attr(&r.title)
+            ));
+            out.push_str("    </object>\n");
+        }
+        out.push_str("  </objects>\n");
     }
     out.push_str("</database>\n");
 
@@ -257,8 +281,11 @@ struct GPlace {
     parent: Option<String>,
 }
 
-struct Importer {
+struct Importer<'a> {
     pkg: Package,
+    resolve: crate::Resolve<'a>,
+    /// object handle -> file reference
+    objects: HashMap<String, String>,
     dropped: Dropped,
     warnings: Vec<String>,
     events: HashMap<String, GEvent>,
@@ -312,7 +339,7 @@ fn parse_date(ev: &Element) -> DateValue {
     DateValue::default()
 }
 
-pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
+pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportReport)> {
     let xml = gunzip_if_needed(bytes)?;
     let doc = Document::parse(&xml).map_err(|e| Error::Gramps(e.to_string()))?;
     let root = &doc.root;
@@ -321,6 +348,8 @@ pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
     }
     let mut imp = Importer {
         pkg: Package::new(),
+        resolve,
+        objects: HashMap::new(),
         dropped: Dropped::default(),
         warnings: Vec::new(),
         events: HashMap::new(),
@@ -355,6 +384,12 @@ pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
         );
     }
 
+    for o in root.child("objects").into_iter().flat_map(|c| c.children_named("object")) {
+        if let Some(src) = o.child("file").and_then(|f| f.attr("src")) {
+            imp.objects.insert(key(&o.attr("handle").unwrap_or_default()), src.into_owned());
+        }
+    }
+
     let mut report = ImportReport::default();
     for p in root.child("people").into_iter().flat_map(|c| c.children_named("person")) {
         imp.person(p)?;
@@ -365,7 +400,7 @@ pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
         report.families += 1;
     }
     for section in root.elements() {
-        if !["header", "events", "people", "families", "places"].contains(&section.name.as_str()) {
+        if !["header", "events", "people", "families", "places", "objects"].contains(&section.name.as_str()) {
             let n = section.elements().count();
             if n > 0 {
                 imp.dropped.add_n(section.name.clone(), n);
@@ -385,7 +420,7 @@ pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
     Ok((imp.pkg, report))
 }
 
-impl Importer {
+impl Importer<'_> {
     /// `Name, Parent, Country` from the place hierarchy.
     fn place_title(&self, handle: &str) -> String {
         let mut parts = Vec::new();
@@ -428,6 +463,7 @@ impl Importer {
         let gender = match p.child_text("gender").as_deref().map(str::trim) {
             Some("M") => Gender::Male,
             Some("F") => Gender::Female,
+            Some("X") => Gender::Other,
             _ => Gender::Unknown,
         };
         let names: Vec<&Element> = p.children_named("name").collect();
@@ -461,6 +497,10 @@ impl Importer {
                     dead |= matches!(tag.as_str(), "DEAT" | "BURI" | "CREM");
                     edit::add_fact(&mut self.pkg.doc, &id, &tag, &input)?;
                 }
+                "objref" => match self.objects.get(&handle(c)).cloned() {
+                    Some(file) => crate::import_photo(&mut self.pkg, &id, &file, self.resolve, &mut self.dropped),
+                    None => self.dropped.add("person.objref to unknown object"),
+                },
                 "gender" | "name" | "childof" | "parentin" => {}
                 other => self.dropped.add(format!("person.{other}")),
             }

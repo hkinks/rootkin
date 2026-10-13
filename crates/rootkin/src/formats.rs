@@ -14,6 +14,9 @@ pub fn import(path: &Path) -> Result<(Package, String), String> {
     Ok((pkg, summary))
 }
 
-pub fn export(pkg: &Package, path: &Path) -> Result<(), String> {
-    rootkin_formats::export_path(pkg, path).map_err(|e| e.to_string())
+pub use rootkin_formats::Format;
+
+/// Export with photos copied into `<name>_media/` next to the file.
+pub fn export(pkg: &Package, path: &Path, format: Format) -> Result<(), String> {
+    rootkin_formats::export_path_as(pkg, path, format).map_err(|e| e.to_string())
 }

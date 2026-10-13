@@ -67,7 +67,7 @@ fn check(tree: &Tree, report: &ImportReport) {
     let has = |needle: &str| report.warnings.iter().any(|w| w.contains(needle));
     assert!(has("INDI._CUSTOM"), "{:?}", report.warnings);
     assert!(has("INDI.NOTE"));
-    assert!(has("INDI.OBJE"));
+    assert!(has("photo"), "the OBJE file does not exist or is not PNG/JPEG");
     assert!(has("INDI.BIRT.SOUR"));
     assert!(has("FAM._MARR_LICENCE"));
     assert!(has("FAM.MARR without two spouses"));

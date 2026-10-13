@@ -1,8 +1,9 @@
-//! GEDCOM 5.5.1 export, and tolerant import of 5.5 / 5.5.1 / 7.0 and vendor variants.
+//! GEDCOM 5.5.1 and 7.0 export, and tolerant import of 5.5 / 5.5.1 / 7.0 and vendor variants.
 //!
 //! Mapping notes (see `docs/design.md`): attributes (`OCCU`, `EDUC`, ...) keep
-//! their text in the fact's details; events keep it as a `NOTE`. Photos,
-//! sources, notes on people and `_CUSTOM` tags are not imported.
+//! their text in the fact's details; events keep it as a `NOTE`. Photos are
+//! `OBJE` records pointing at files; sources, notes on people and `_CUSTOM`
+//! tags are not imported.
 
 use std::collections::{HashMap, HashSet};
 
@@ -13,7 +14,7 @@ use familyx::Package;
 use crate::dates::{self, DateValue};
 use crate::families::{self, Fam};
 use crate::vocab::{self, FAM_EVENTS, INDI_ATTRIBUTES, INDI_EVENTS};
-use crate::{Dropped, Error, ImportReport, Result};
+use crate::{Dropped, Error, ExportMedia, ImportReport, Resolve, Result};
 
 /// Longest value chunk per physical line (the limit is 255 including level and tag).
 const CHUNK: usize = 240;
@@ -22,6 +23,8 @@ const CHUNK: usize = 240;
 
 struct Writer {
     out: String,
+    /// GEDCOM 7: no line length limit, so no `CONC`.
+    v7: bool,
 }
 
 impl Writer {
@@ -42,6 +45,10 @@ impl Writer {
         let escaped = value.replace('@', "@@").replace("\r\n", "\n");
         for (i, segment) in escaped.split('\n').enumerate() {
             let (lvl, t) = if i == 0 { (level, tag) } else { (level + 1, "CONT") };
+            if self.v7 {
+                self.raw(lvl, t, segment);
+                continue;
+            }
             for (j, chunk) in split_chunks(segment, CHUNK).into_iter().enumerate() {
                 if j == 0 {
                     self.raw(lvl, t, chunk);
@@ -84,20 +91,24 @@ fn split_chunks(s: &str, max: usize) -> Vec<&str> {
     out
 }
 
-pub fn export(pkg: &Package) -> Vec<u8> {
+pub(crate) fn export(pkg: &Package, v7: bool, media: &ExportMedia) -> Vec<u8> {
     let tree = Tree::from_doc(&pkg.doc);
     let fams = families::build(&tree);
     let indi_xref = |id: &str| tree.people.iter().position(|p| p.id == id).map(|i| format!("I{}", i + 1));
 
-    let mut w = Writer { out: String::new() };
+    let mut w = Writer { out: String::new(), v7 };
     w.raw(0, "HEAD", "");
     w.raw(1, "SOUR", "ROOTKIN");
     w.raw(2, "NAME", "Rootkin");
     w.raw(2, "VERS", env!("CARGO_PKG_VERSION"));
     w.raw(1, "GEDC", "");
-    w.raw(2, "VERS", "5.5.1");
-    w.raw(2, "FORM", "LINEAGE-LINKED");
-    w.raw(1, "CHAR", "UTF-8");
+    if v7 {
+        w.raw(2, "VERS", "7.0");
+    } else {
+        w.raw(2, "VERS", "5.5.1");
+        w.raw(2, "FORM", "LINEAGE-LINKED");
+        w.raw(1, "CHAR", "UTF-8");
+    }
     w.pointer(1, "SUBM", "U1");
     w.record("U1", "SUBM");
     w.raw(1, "NAME", "Rootkin");
@@ -124,6 +135,16 @@ pub fn export(pkg: &Package) -> Vec<u8> {
         for fact in &person.facts {
             write_fact(&mut w, fact, false);
         }
+        // the primary photo first: readers commonly treat it as the portrait
+        let photos = person
+            .primary_image
+            .iter()
+            .chain(person.media.iter().filter(|m| Some(*m) != person.primary_image.as_ref()));
+        for m in photos {
+            if let Some(r) = media.refs.get(m) {
+                w.pointer(1, "OBJE", &format!("O{}", r.number));
+            }
+        }
         for (f, fam) in fams.iter().enumerate() {
             if fam.husb == Some(&person.id) || fam.wife == Some(&person.id) {
                 w.pointer(1, "FAMS", &format!("F{}", f + 1));
@@ -132,11 +153,15 @@ pub fn export(pkg: &Package) -> Vec<u8> {
         for (f, fam) in fams.iter().enumerate() {
             if let Some(child) = fam.children.iter().find(|c| c.id == person.id) {
                 w.pointer(1, "FAMC", &format!("F{}", f + 1));
-                match child.modifier() {
-                    "Adopted" => w.raw(2, "PEDI", "adopted"),
-                    "Foster" => w.raw(2, "PEDI", "foster"),
-                    "Sealing" => w.raw(2, "PEDI", "sealing"),
-                    _ => {}
+                let pedi = match child.modifier() {
+                    "Adopted" => "adopted",
+                    "Foster" => "foster",
+                    "Sealing" => "sealing",
+                    _ => "",
+                };
+                if !pedi.is_empty() {
+                    // 7.0 uses upper-case enumeration values
+                    w.raw(2, "PEDI", &if v7 { pedi.to_ascii_uppercase() } else { pedi.to_string() });
                 }
             }
         }
@@ -144,6 +169,21 @@ pub fn export(pkg: &Package) -> Vec<u8> {
 
     for (f, fam) in fams.iter().enumerate() {
         write_family(&mut w, f + 1, fam, &indi_xref);
+    }
+    for id in &media.order {
+        let r = &media.refs[id];
+        w.record(&format!("O{}", r.number), "OBJE");
+        w.line(1, "FILE", &r.path);
+        let form = match (v7, r.ext.as_str()) {
+            (true, "png") => "image/png".to_string(),
+            (true, _) => "image/jpeg".to_string(),
+            (false, ext) => ext.to_string(),
+        };
+        w.raw(2, "FORM", &form);
+        if !r.title.is_empty() {
+            // 5.5.1 puts the title under FILE; 7.0 too (FILE.TITL)
+            w.line(2, "TITL", &r.title);
+        }
     }
     w.raw(0, "TRLR", "");
     w.out.into_bytes()
@@ -377,8 +417,11 @@ fn split_name(value: &str) -> (String, String, String) {
 /// Tags that carry no genealogical content for us; not worth a warning.
 const SILENT: &[&str] = &["CHAN", "RIN", "RFN", "AFN", "REFN", "UID", "_UID", "FAMS", "RESN", "FAMC"];
 
-struct Importer {
+struct Importer<'a> {
     pkg: Package,
+    resolve: Resolve<'a>,
+    /// OBJE xref -> file reference
+    objects: HashMap<String, String>,
     dropped: Dropped,
     warnings: Vec<String>,
     notes: HashMap<String, String>,
@@ -392,7 +435,7 @@ struct Importer {
     famc_children: HashMap<String, Vec<String>>,
 }
 
-pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
+pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)> {
     let mut warnings = Vec::new();
     let text = decode(bytes, &mut warnings);
     let roots = parse(&text, &mut warnings);
@@ -401,6 +444,8 @@ pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
     }
     let mut imp = Importer {
         pkg: Package::new(),
+        resolve,
+        objects: HashMap::new(),
         dropped: Dropped::default(),
         warnings,
         notes: HashMap::new(),
@@ -416,8 +461,16 @@ pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
     }
 
     for n in &roots {
-        if let (Some(x), "NOTE") = (&n.xref, n.tag.as_str()) {
-            imp.notes.insert(x.clone(), n.value.clone());
+        match (&n.xref, n.tag.as_str()) {
+            (Some(x), "NOTE") => {
+                imp.notes.insert(x.clone(), n.value.clone());
+            }
+            (Some(x), "OBJE") => {
+                if let Some(file) = n.child_value("FILE") {
+                    imp.objects.insert(x.clone(), file.to_string());
+                }
+            }
+            _ => {}
         }
     }
     let mut report = ImportReport::default();
@@ -431,7 +484,7 @@ pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
     }
     for n in &roots {
         match n.tag.as_str() {
-            "HEAD" | "TRLR" | "SUBM" | "SUBN" | "INDI" | "FAM" | "NOTE" => {}
+            "HEAD" | "TRLR" | "SUBM" | "SUBN" | "INDI" | "FAM" | "NOTE" | "OBJE" => {}
             other => imp.dropped.add(format!("{other} record")),
         }
     }
@@ -448,7 +501,7 @@ pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
     Ok((imp.pkg, report))
 }
 
-impl Importer {
+impl Importer<'_> {
     /// Text of a `NOTE` line: inline, or the record it points to.
     fn note_text(&self, n: &Node) -> String {
         if is_pointer(&n.value) {
@@ -524,6 +577,17 @@ impl Importer {
                     for famc in c.children_named("FAMC") {
                         self.adopted.insert((famc.value.trim().to_string(), xref.clone()));
                     }
+                }
+            } else if tag == "OBJE" {
+                // a pointer to an OBJE record, or an inline FILE
+                let file = if is_pointer(&c.value) {
+                    self.objects.get(c.value.trim()).cloned()
+                } else {
+                    c.child_value("FILE").map(str::to_string)
+                };
+                match file {
+                    Some(file) => crate::import_photo(&mut self.pkg, &id, &file, self.resolve, &mut self.dropped),
+                    None => self.dropped.add("INDI.OBJE without a file"),
                 }
             } else if tag == "FAMC" {
                 if let Some(xref) = &n.xref {
@@ -659,7 +723,7 @@ mod tests {
     #[test]
     fn long_and_multiline_values_roundtrip_through_conc_cont() {
         let value = format!("{}\nsecond line with é and @ sign\n\nlast", "word ".repeat(120));
-        let mut w = Writer { out: String::new() };
+        let mut w = Writer { out: String::new(), v7: false };
         w.raw(0, "HEAD", "");
         w.line(1, "NOTE", &value);
         assert!(w.out.lines().all(|l| l.len() <= 255), "line too long");
