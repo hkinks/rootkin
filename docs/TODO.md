@@ -6,7 +6,7 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 
 1. Verify in the Windows app that Linux-saved files open (see "Verify")
 2. Launch: Flathub/AUR packaging, announcements (plan kept locally, not in git)
-3. Remaining older-format leftovers (LDS facts, associations, ...), confirmed with real old files when available
+3. Older-format leftovers: database-backed stories; everything else is converted but should be confirmed with real old files
 
 ## Publishing
 
@@ -75,14 +75,17 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
 ## Data / format
 - [x] Sources window (View → Sources…): list, add, edit, delete (with its citations)
 - [x] Edit sources/citations: "+ Cite source" on events and on the person, page field, remove
-- [~] Older formats (`family7`, `family5`, `family4`, `family`, plain `content.xml`, family8/7 V1/V2): containers
+- [x] Older formats (`family7`, `family5`, `family4`, `family`, plain `content.xml`, family8/7 V1/V2): containers
       decrypt (verified against the app's own decrypt code) and the old element schema is migrated on open
-      (`crate::migrate`, `Package::migration()`): relationships -> links with back-references, names, photos/files,
-      stories, contact address, old dates, GUID ids (docs/design.md, "Schema migration"). Derived from the decompiled
-      conversion code and verified against hand-written fictional fixtures only (running the vendor code was not possible).
-      Open: LDS facts, database-backed stories, godparent/sponsor/witness roles (-> associations), obsolete biology
-      fields (-> facts), `FactType`, citations/witnesses/addresses on facts, family crest, a few guessed element
-      names (see design.md); real old files would confirm all of it. `Package::has_legacy_schema()` flags the leftovers.
+      (`crate::migrate`, `Package::migration()`): relationships -> links with back-references, godparent/sponsor/
+      witness -> associations, names, photos/files, family crest, stories, contact address, old dates, GUID ids, LDS
+      facts, obsolete biology fields -> facts/DNA, `FactType`, fact addresses/witnesses/citations (docs/design.md,
+      "Schema migration"). Derived from the decompiled conversion code and checked by running the app's own
+      conversion chain on small synthetic inputs (reflection harness, not in the repo); crest and story files only
+      by reading the code. Confirmation with real old files is still desirable.
+- [ ] Older formats: database-backed stories (`Story/FileId`, versions 7.0-14.1): the text is in the app's encrypted
+      LiteDB file (`stories7`, private `LiteDB4` build); the `Story` element is kept and `has_legacy_schema()` stays
+      true. Needs a real sample to implement.
 - [x] "New family tree" in the UI (library: `Package::new` done)
 - [x] Understand `FamilyId` attribute: password hash record, UI lock only; new files now get the default-password hash (docs/design.md)
 - [x] Update `FileProperties/LastSavedDate` and `FamilyProperties/LastSavedPersonId` on save
