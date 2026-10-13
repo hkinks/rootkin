@@ -17,11 +17,7 @@ fn fixture_is_consistent() {
 fn add_person_with_facts_survives_save() {
     let mut pkg = open();
     let id = edit::add_person(&mut pkg.doc, "Ada", "Test", Gender::Female);
-    let birth = FactInput {
-        date: Date { year: Some(1990), month: Some(4), day: Some(2), descriptor: "Span".into() },
-        place: "Tartu <& co>".into(),
-        details: String::new(),
-    };
+    let birth = FactInput { date: Date::ymd(1990, 4, 2), place: "Tartu <& co>".into(), details: String::new() };
     let fact_id = edit::add_fact(&mut pkg.doc, &id, "BIRT", &birth).unwrap();
     edit::set_living(&mut pkg.doc, &id, true).unwrap();
 
@@ -39,11 +35,17 @@ fn add_person_with_facts_survives_save() {
     assert_eq!(f.place, "Tartu <& co>");
 
     let mut doc = reopened.doc;
-    let cleared = FactInput { date: Date { year: Some(1991), ..Default::default() }, ..Default::default() };
+    let cleared = FactInput {
+        date: Date { end_year: Some(1995), ..Date::year(1991).with_descriptor("Range") },
+        ..Default::default()
+    };
     edit::update_fact(&mut doc, &fact_id, &cleared).unwrap();
     let tree = Tree::from_doc(&doc);
     let f = tree.person(&id).unwrap().fact("BIRT").unwrap();
     assert_eq!((f.date.year, f.date.month, f.place.as_str()), (Some(1991), None, ""));
+    assert_eq!((f.date.descriptor.as_str(), f.date.end_year), ("Range", Some(1995)));
+    let xml = String::from_utf8(doc.to_bytes()).unwrap();
+    assert!(xml.contains("<StartYear>1991</StartYear><EndYear>1995</EndYear><DateDescriptor>Range</DateDescriptor>"));
     edit::delete_fact(&mut doc, &fact_id).unwrap();
     assert!(Tree::from_doc(&doc).person(&id).unwrap().fact("BIRT").is_none());
 }

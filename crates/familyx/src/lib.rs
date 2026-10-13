@@ -6,6 +6,7 @@
 //! saving preserves everything this crate does not understand.
 
 pub mod codec;
+pub mod date;
 pub mod doc;
 pub mod edit;
 pub mod model;

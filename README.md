@@ -1,8 +1,12 @@
 # Rootkin
 
-A free, cross-platform family tree editor written in Rust. It opens, edits and
-saves `.familyx` files (the format used by Chronoplex *My Family Tree*), so a
-tree can be maintained on Linux and still be opened by the Windows program.
+**Your family tree, on your computer — no cloud, no account, no subscription.**
+
+Rootkin is a free, cross-platform family tree editor written in Rust. Your
+family's names, dates and photos stay in a file you own; nothing is uploaded
+anywhere. It opens, edits and saves `.familyx` files (the format used by
+Chronoplex *My Family Tree*), so a tree can be maintained on Linux and still
+be opened by the Windows program.
 
 Rootkin is an independent project and is not affiliated with Chronoplex Software.
 
@@ -10,6 +14,7 @@ Rootkin is an independent project and is not affiliated with Chronoplex Software
 
 ## Features
 
+- Private by design: works fully offline, no telemetry, no network access
 - Read and write `.familyx` (v3 `family8` part) losslessly: anything the editor
   does not understand is preserved byte-for-byte
 - People list with search, zoomable ancestor/descendant tree, photos

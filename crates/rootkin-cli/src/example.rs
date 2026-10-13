@@ -40,15 +40,15 @@ impl Builder<'_> {
 }
 
 fn ymd(year: i32, month: u32, day: u32) -> Date {
-    Date { year: Some(year), month: Some(month), day: Some(day), descriptor: "Span".into() }
+    Date::ymd(year, month, day)
 }
 
 fn year(year: i32) -> Date {
-    Date { year: Some(year), ..Default::default() }
+    Date::year(year)
 }
 
 fn about(year: i32) -> Date {
-    Date { year: Some(year), descriptor: "About".into(), ..Default::default() }
+    Date::year(year).with_descriptor("About")
 }
 
 /// A small placeholder portrait: a two-colour gradient.
@@ -79,7 +79,7 @@ pub fn build() -> Result<Package> {
         &[
             ("BIRT", ymd(1890, 3, 14), "Uppsala, Sweden", ""),
             ("DEAT", ymd(1961, 11, 2), "Tallinn, Estonia", ""),
-            ("OCCU", year(1920), "", "Clockmaker"),
+            ("OCCU", year(1920).with_descriptor("After"), "", "Clockmaker"),
         ],
     )?;
     let elsa = b.person(
