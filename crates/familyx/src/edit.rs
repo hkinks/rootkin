@@ -136,14 +136,9 @@ fn person_exists(doc: &Document, id: &str) -> bool {
 
 /// An empty family document in the shape the app writes.
 pub fn new_family_document() -> Document {
-    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-    let mut salt = [0u8; 32];
-    let mut hash = [0u8; 64];
-    rand::thread_rng().fill_bytes(&mut salt);
-    rand::thread_rng().fill_bytes(&mut hash);
-    // Same shape as the app's FamilyId (base64 "SHA512", "210000", salt, hash
-    // separated by NUL); what the app derives it from is unknown.
-    let family_id = [b64(b"SHA512"), b64(b"210000"), b64(&salt), b64(&hash)].join("\0");
+    // Hash of the app's built-in default password under a random salt: the
+    // app treats any other FamilyId as "password protected" (see `protection`).
+    let family_id = crate::protection::default_family_id();
     let now = utc_now();
     let xml = format!(
         "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?><Family \

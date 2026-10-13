@@ -6,3 +6,4 @@
 *.bak
 *.xml
 !/crates/familyx/tests/data/example.familyx
+!/crates/familyx/tests/data/old/plaintext.xml

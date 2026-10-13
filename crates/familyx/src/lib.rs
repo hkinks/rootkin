@@ -11,6 +11,7 @@ pub mod doc;
 pub mod edit;
 pub mod model;
 pub mod package;
+pub mod protection;
 pub mod richtext;
 
 pub use package::Package;
@@ -25,7 +26,7 @@ pub enum Error {
     Xml(String),
     #[error("unsupported or corrupt family data: {0}")]
     Format(String),
-    #[error("HMAC mismatch: file is corrupt or not a family8 v3 part")]
+    #[error("HMAC mismatch: file is corrupt or not a family8/family7 part")]
     Mac,
 }
 
