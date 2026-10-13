@@ -3,19 +3,28 @@
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
+use crate::codec::{SourceFormat, PART_NAMES};
 use crate::doc::{Document, Element};
 use crate::model::Id;
-use crate::{codec, edit, Error, Result};
+use crate::{codec, edit, protection, Error, Result};
 
 const FAMILY_PART: &str = "family8";
+const FAMILY_CONTENT_TYPE: &str = "application/vnd.chronoplexsoftware.familyx";
 
 /// An opened `.familyx` file: the decoded tree plus every other part verbatim.
+///
+/// Older files (tree part `family7`, `family5`, `family4`, `family`, `content.xml`,
+/// or `family8` with the V1/V2 encryption) are read transparently, but saving
+/// always writes the current format: a `family8` V3 part, with the package
+/// metadata (`[Content_Types].xml`, `_rels/.rels`) pointing at it. See
+/// [`Package::source_format`].
 pub struct Package {
     pub doc: Document,
-    /// All zip entries other than `family8`, in original order.
+    /// All zip entries other than the tree part, in original order.
     parts: Vec<(String, Vec<u8>)>,
-    /// Position of `family8` among the entries, so saving keeps the order.
+    /// Position of the tree part among the entries, so saving keeps the order.
     family_index: usize,
+    source: SourceFormat,
 }
 
 const CONTENT_TYPES: &str = "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
@@ -32,6 +41,7 @@ impl Package {
             doc: edit::new_family_document(),
             parts: vec![("[Content_Types].xml".into(), CONTENT_TYPES.as_bytes().to_vec())],
             family_index: 2,
+            source: SourceFormat::CURRENT,
         };
         let rels = "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?>\
 <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\" />";
@@ -100,24 +110,121 @@ impl Package {
         Self::from_bytes(&std::fs::read(path)?)
     }
 
+    /// The format this package was read from (`SourceFormat::CURRENT` for new
+    /// packages). Saving always writes `SourceFormat::CURRENT`.
+    pub fn source_format(&self) -> SourceFormat {
+        self.source
+    }
+
+    /// True if the tree carries a user password (`FamilyId` is not the default
+    /// record). The data is readable regardless; the Windows app will prompt.
+    pub fn is_password_protected(&self) -> bool {
+        protection::document_is_protected(&self.doc)
+    }
+
+    /// True if the tree still uses elements of the pre-link schema (per-person
+    /// `Relationships`, `Photos`, `Story`, root-level `PhotoCollection`, ...).
+    /// The app converts those on load; this crate neither shows nor migrates them
+    /// (they are preserved verbatim), so such a tree can look incomplete.
+    pub fn has_legacy_schema(&self) -> bool {
+        const ROOT: [&str; 5] = [
+            "Author",
+            "PhotoCollection",
+            "AttachmentCollection",
+            "AudioVideoCollection",
+            "PackagedFilePropertiesCollection",
+        ];
+        const PERSON: [&str; 9] = [
+            "Relationships",
+            "Photos",
+            "Attachments",
+            "AudioVideo",
+            "LDSFacts",
+            "Story",
+            "Name",
+            "AlternativeName",
+            "ContactAddress",
+        ];
+        self.doc.root.elements().any(|e| ROOT.contains(&e.name.as_str()))
+            || self
+                .doc
+                .root
+                .child("PeopleCollection")
+                .is_some_and(|c| c.elements().any(|p| p.elements().any(|e| PERSON.contains(&e.name.as_str()))))
+    }
+
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let mut zip = zip::ZipArchive::new(Cursor::new(bytes))?;
-        let mut parts = Vec::with_capacity(zip.len());
-        let mut family = None;
+        let mut entries = Vec::with_capacity(zip.len());
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i)?;
             let mut data = Vec::with_capacity(entry.size() as usize);
             entry.read_to_end(&mut data)?;
-            if entry.name() == FAMILY_PART {
-                family = Some((i, data));
-            } else {
-                parts.push((entry.name().to_string(), data));
+            entries.push((entry.name().to_string(), data));
+        }
+        // The newest tree part present wins; any others are carried along verbatim.
+        let family_index =
+            PART_NAMES.iter().find_map(|part| entries.iter().position(|(name, _)| name == part)).ok_or_else(|| {
+                Error::Format(
+                    "no tree part (expected family8, family7, family5, family4, family or content.xml)".into(),
+                )
+            })?;
+        let (name, blob) = entries.remove(family_index);
+        let (xml, source) = codec::decode_part(&name, &blob)?;
+        let mut doc = Document::parse(&xml)?;
+        if !source.is_current() {
+            // Old trees may lack the password record or carry the pre-210000 notation;
+            // make it what the current app writes (it does the same on conversion).
+            if let Some(family_id) = protection::upgrade_legacy_family_id(doc.root.attr("FamilyId").as_deref()) {
+                doc.root.set_attr("FamilyId", &family_id);
             }
         }
-        let (family_index, blob) = family
-            .ok_or_else(|| Error::Format("no family8 part (older .familyx versions are not supported)".into()))?;
-        let doc = Document::parse(&codec::decode(&blob)?)?;
-        Ok(Package { doc, parts, family_index })
+        let mut pkg = Package { doc, parts: entries, family_index, source };
+        if source.part_name() != FAMILY_PART {
+            pkg.retarget_tree_part(source.part_name())?;
+        }
+        Ok(pkg)
+    }
+
+    /// Point `[Content_Types].xml` and `_rels/.rels` at `family8` instead of `old`,
+    /// so the package describes the part that saving writes.
+    fn retarget_tree_part(&mut self, old: &str) -> Result<()> {
+        let (old_path, new_path) = (format!("/{old}"), format!("/{FAMILY_PART}"));
+        if let Some((_, data)) = self.parts.iter_mut().find(|(n, _)| n == "[Content_Types].xml") {
+            let mut types = Document::parse(data)?;
+            let mut found = false;
+            for el in types.root.elements_mut().filter(|e| e.name == "Override") {
+                if el.attr("PartName").as_deref() == Some(&old_path)
+                    || el.attr("PartName").as_deref() == Some(&new_path)
+                {
+                    el.set_attr("PartName", &new_path);
+                    found = true;
+                }
+            }
+            if !found {
+                types.root.push(
+                    Element::new("Override")
+                        .with_attr("PartName", &new_path)
+                        .with_attr("ContentType", FAMILY_CONTENT_TYPE),
+                );
+            }
+            *data = types.to_bytes();
+        }
+        if let Some((_, data)) = self.parts.iter_mut().find(|(n, _)| n == RELS_PART) {
+            let mut rels = Document::parse(data)?;
+            let mut found = false;
+            for el in rels.root.elements_mut().filter(|e| e.name == "Relationship") {
+                if el.attr("Target").as_deref() == Some(&old_path) || el.attr("Target").as_deref() == Some(&new_path) {
+                    el.set_attr("Target", &new_path);
+                    found = true;
+                }
+            }
+            *data = rels.to_bytes();
+            if !found {
+                self.add_relationship(&new_path)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {

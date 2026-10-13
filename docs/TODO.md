@@ -44,7 +44,7 @@ Planned crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays fo
 
 ## Verify
 - [ ] Open a re-encrypted, unmodified file in the Windows app
-- [ ] Open the generated example (`rootkin-cli example`) in the Windows app (new-file skeleton, random `FamilyId`)
+- [ ] Open the generated example (`rootkin-cli example`) in the Windows app (new-file skeleton, default-password `FamilyId`)
 - [ ] Open a file edited + saved by the Linux editor in the Windows app
 
 ## Editing
@@ -71,9 +71,12 @@ Planned crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays fo
 
 ## Data / format
 - [ ] Sources, repositories, citations (currently preserved but not shown)
-- [ ] Older formats (`family7`, `family5`, `family4`, `family`) — read-only import
+- [~] Older formats (`family7`, `family5`, `family4`, `family`, plain `content.xml`, family8/7 V1/V2): container
+      decryption done and verified against the app's own decrypt code (`Package::source_format()`, saved as family8 V3);
+      **schema migration is open** (old per-person `Relationships`, `Photos`, `Story`, ... are kept but not shown;
+      `Package::has_legacy_schema()`); needs real old files — see docs/design.md
 - [ ] "New family tree" in the UI (library: `Package::new` done)
-- [ ] Understand `FamilyId` attribute (looks like a password-hash record: `SHA512\0210000\0salt\0hash`) — password-protected trees?
+- [x] Understand `FamilyId` attribute: password hash record, UI lock only; new files now get the default-password hash (docs/design.md)
 - [ ] Update `FileProperties/LastSavedDate` and `FamilyProperties/LastSavedPersonId` on save
 
 ## UX
