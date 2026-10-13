@@ -5,3 +5,4 @@
 *.familyx.tmp
 *.bak
 *.xml
+!/crates/familyx/tests/data/example.familyx

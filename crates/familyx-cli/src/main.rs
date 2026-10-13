@@ -1,5 +1,7 @@
 //! Debugging tool for `.familyx` files.
 
+mod example;
+
 use anyhow::{bail, Context, Result};
 use familyx::{codec, model::Tree, Package};
 
@@ -9,7 +11,8 @@ const USAGE: &str = "usage:
                                           replace the tree XML and save as a new file
   familyx roundtrip <file.familyx>        verify decode/encode is lossless
   familyx summary <file.familyx>          list people
-  familyx check <file.familyx>            report dangling references";
+  familyx check <file.familyx>            report dangling references
+  familyx example <out.familyx>           write a fictional example family";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -47,6 +50,14 @@ fn main() -> Result<()> {
                 tree.parent_links.len(),
                 tree.media.len()
             );
+        }
+        ["example", out] => {
+            let pkg = example::build()?;
+            let problems = familyx::edit::check(&pkg.doc);
+            if !problems.is_empty() {
+                bail!("generated tree is inconsistent: {problems:?}");
+            }
+            std::fs::write(out, pkg.to_bytes()?)?;
         }
         ["check", file] => {
             let problems = familyx::edit::check(&Package::open(file).context("open")?.doc);

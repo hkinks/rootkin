@@ -37,22 +37,22 @@ pub fn new_id() -> Id {
 }
 
 /// UTC timestamp like the app's `Creation` attributes: `2025-12-16T17:35:24.6905393Z`.
-fn utc_now() -> String {
+pub(crate) fn utc_now() -> String {
     let now = chrono::Utc::now();
     format!("{}.{:07}Z", now.format("%Y-%m-%dT%H:%M:%S"), now.timestamp_subsec_nanos() / 100)
 }
 
 /// Local timestamp like the app's `LastSaved` attributes: `2021-08-06T00:45:45.0180957+03:00`.
-fn local_now() -> String {
+pub(crate) fn local_now() -> String {
     let now = chrono::Local::now();
     format!("{}.{:07}{}", now.format("%Y-%m-%dT%H:%M:%S"), now.timestamp_subsec_nanos() / 100, now.format("%:z"))
 }
 
-fn record(name: &str) -> Element {
+pub(crate) fn record(name: &str) -> Element {
     Element::new(name).with_attr("Id", &new_id()).with_attr("Creation", &utc_now())
 }
 
-fn text_el(name: &str, value: &str) -> Element {
+pub(crate) fn text_el(name: &str, value: &str) -> Element {
     let mut el = Element::new(name);
     el.set_text(value);
     el
@@ -100,6 +100,46 @@ fn person_exists(doc: &Document, id: &str) -> bool {
     doc.root
         .child("PeopleCollection")
         .is_some_and(|c| c.children_named("Person").any(|p| p.attr("Id").as_deref() == Some(id)))
+}
+
+// ---------------------------------------------------------------- document
+
+/// An empty family document in the shape the app writes.
+pub fn new_family_document() -> Document {
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mut salt = [0u8; 32];
+    let mut hash = [0u8; 64];
+    rand::thread_rng().fill_bytes(&mut salt);
+    rand::thread_rng().fill_bytes(&mut hash);
+    // Same shape as the app's FamilyId (base64 "SHA512", "210000", salt, hash
+    // separated by NUL); what the app derives it from is unknown.
+    let family_id = [b64(b"SHA512"), b64(b"210000"), b64(&salt), b64(&hash)].join("\0");
+    let now = utc_now();
+    let xml = format!(
+        "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?><Family \
+         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" \
+         FamilyId=\"{family_id}\"><AuthorCollection><Author Id=\"{author}\" LastSaved=\"{local}\" Creation=\"{now}\">\
+         <Name /><IsPrimary>true</IsPrimary></Author></AuthorCollection><PeopleCollection /><SourceCollection />\
+         <RepositoryCollection /><PackagedFileCollection /><TaskCollection /><RelationshipCollection />\
+         <TagCollection /><FileProperties Id=\"{fp}\" Creation=\"{now}\"><Version>14.8</Version>\
+         <LastSavedDate>{now}</LastSavedDate><CreationDate>{now}</CreationDate></FileProperties>\
+         <FamilyProperties Id=\"{fam}\" Creation=\"{now}\" /></Family>",
+        family_id = crate::doc::escape(&family_id, true),
+        author = new_id(),
+        local = local_now(),
+        fp = new_id(),
+        fam = new_id(),
+    );
+    Document::parse(xml.as_bytes()).expect("static skeleton is valid XML")
+}
+
+pub fn set_home_person(doc: &mut Document, person_id: &str) -> EditResult<()> {
+    if !person_exists(doc, person_id) {
+        return Err(EditError::NoPerson(person_id.to_string()));
+    }
+    let props = doc.root.ensure_child("FamilyProperties", FAMILY_ORDER);
+    props.ensure_child("HomePersonId", &["LastSavedPersonId", "HomePersonId"]).set_text(person_id);
+    Ok(())
 }
 
 // ---------------------------------------------------------------- people
@@ -151,6 +191,24 @@ pub fn set_name(doc: &mut Document, person_id: &str, given: &str, surname: &str)
     name.ensure_child("Surname", NAME_ORDER).set_text(surname);
     touch(person_mut(doc, person_id)?);
     Ok(())
+}
+
+/// Add a non-primary name, e.g. a birth or married name (`name_type` like `Married`).
+pub fn add_alternate_name(doc: &mut Document, person_id: &str, given: &str, surname: &str, name_type: &str) -> EditResult<Id> {
+    let person = person_mut(doc, person_id)?;
+    let mut name = record("Name");
+    let id = name.attr("Id").unwrap_or_default().into_owned();
+    name.push(text_el("Names", given));
+    name.push(Element::new("SurnamePrefix"));
+    name.push(text_el("Surname", surname));
+    name.push(Element::new("Suffix"));
+    name.push(Element::new("Nickname"));
+    if !name_type.is_empty() {
+        name.push(text_el("NameType", name_type));
+    }
+    person.ensure_child("PersonNameCollection", PERSON_ORDER).ensure_child("Names", &[]).push(name);
+    touch(person);
+    Ok(id)
 }
 
 pub fn set_gender(doc: &mut Document, person_id: &str, gender: Gender) -> EditResult<()> {
@@ -448,6 +506,28 @@ pub fn unlink_parent(doc: &mut Document, child: &str, parent: &str) -> EditResul
         links.remove_children_where(|l| l.attr("FamilyId").is_some_and(|f| parent_couples.iter().any(|c| *c == f)));
     }
     touch(person);
+    Ok(())
+}
+
+/// Register a `PackagedFile` and make it `person_id`'s primary image.
+pub(crate) fn attach_photo(doc: &mut Document, person_id: &str, media_id: &str, file: Element) -> EditResult<()> {
+    let person = person_mut(doc, person_id)?;
+    person.ensure_child("PrimaryImageId", PERSON_ORDER).set_text(media_id);
+    person.ensure_child("Multimedia", PERSON_ORDER).push(text_el("string", media_id));
+    touch(person);
+    collection(doc, "PackagedFileCollection").push(file);
+    Ok(())
+}
+
+/// Mark a parent link, e.g. `Adopted`; empty clears it (biological).
+pub fn set_parent_modifier(doc: &mut Document, child: &str, parent: &str, modifier: &str) -> EditResult<()> {
+    let link_id = link_kind_between(doc, "ParentChildLink", parent, child, true)
+        .ok_or(EditError::Invalid("not a parent of this person"))?;
+    let link = collection(doc, "RelationshipCollection")
+        .elements_mut()
+        .find(|l| l.attr("Id").as_deref() == Some(link_id.as_str()))
+        .expect("found above");
+    set_child_text(link, "ParentChildModifier", modifier, &["CustomParentChildModifier", "ParentChildModifier"]);
     Ok(())
 }
 

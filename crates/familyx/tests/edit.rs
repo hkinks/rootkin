@@ -2,17 +2,7 @@ use familyx::edit::{self, FactInput};
 use familyx::model::{Date, Gender, Tree};
 use familyx::Package;
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../db.obfuscated.familyx");
-
-/// The fixture holds personal data and is not in git; tests skip without it.
-macro_rules! require_fixture {
-    () => {
-        if !std::path::Path::new(FIXTURE).exists() {
-            eprintln!("skipped: {FIXTURE} not present");
-            return;
-        }
-    };
-}
+const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/example.familyx");
 
 fn open() -> Package {
     Package::open(FIXTURE).unwrap()
@@ -20,13 +10,11 @@ fn open() -> Package {
 
 #[test]
 fn fixture_is_consistent() {
-    require_fixture!();
     assert_eq!(edit::check(&open().doc), Vec::<String>::new());
 }
 
 #[test]
 fn add_person_with_facts_survives_save() {
-    require_fixture!();
     let mut pkg = open();
     let id = edit::add_person(&mut pkg.doc, "Ada", "Test", Gender::Female);
     let birth = FactInput {
@@ -39,7 +27,7 @@ fn add_person_with_facts_survives_save() {
 
     let reopened = Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap();
     let tree = Tree::from_doc(&reopened.doc);
-    assert_eq!(tree.people.len(), 116);
+    assert_eq!(tree.people.len(), 18);
     let p = tree.person(&id).unwrap();
     assert_eq!(p.display_name(), "Ada Test");
     assert_eq!(p.gender, Gender::Female);
@@ -62,7 +50,6 @@ fn add_person_with_facts_survives_save() {
 
 #[test]
 fn rename_and_gender_change_existing_person() {
-    require_fixture!();
     let mut pkg = open();
     let home = Tree::from_doc(&pkg.doc).home_person.unwrap();
     edit::set_name(&mut pkg.doc, &home, "Renamed", "Person").unwrap();
@@ -75,7 +62,6 @@ fn rename_and_gender_change_existing_person() {
 
 #[test]
 fn family_links_stay_consistent() {
-    require_fixture!();
     let mut pkg = open();
     let doc = &mut pkg.doc;
     let mum = edit::add_person(doc, "Mum", "X", Gender::Female);
@@ -115,7 +101,6 @@ fn family_links_stay_consistent() {
 
 #[test]
 fn deleting_real_person_keeps_file_consistent() {
-    require_fixture!();
     let mut pkg = open();
     let home = Tree::from_doc(&pkg.doc).home_person.unwrap();
     edit::delete_person(&mut pkg.doc, &home).unwrap();
@@ -132,7 +117,6 @@ fn new_ids_look_like_the_apps() {
 
 #[test]
 fn marriage_fact_on_new_couple() {
-    require_fixture!();
     let mut pkg = open();
     let a = edit::add_person(&mut pkg.doc, "A", "X", Gender::Male);
     let b = edit::add_person(&mut pkg.doc, "B", "Y", Gender::Female);

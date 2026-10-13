@@ -1,18 +1,8 @@
-//! Tests against the real (photo-obfuscated) example file in the repo root.
+//! Tests against the fictional example tree (regenerate: `familyx example <path>`).
 
 use familyx::{codec, model::Tree, Package};
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../db.obfuscated.familyx");
-
-/// The fixture holds personal data and is not in git; tests skip without it.
-macro_rules! require_fixture {
-    () => {
-        if !std::path::Path::new(FIXTURE).exists() {
-            eprintln!("skipped: {FIXTURE} not present");
-            return;
-        }
-    };
-}
+const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/example.familyx");
 
 fn fixture_family8() -> Vec<u8> {
     let bytes = std::fs::read(FIXTURE).unwrap();
@@ -24,7 +14,6 @@ fn fixture_family8() -> Vec<u8> {
 
 #[test]
 fn unmodified_document_serializes_byte_identical() {
-    require_fixture!();
     let xml = codec::decode(&fixture_family8()).unwrap();
     let doc = familyx::doc::Document::parse(&xml).unwrap();
     assert!(doc.to_bytes() == xml, "XML round-trip is not byte-exact");
@@ -32,7 +21,6 @@ fn unmodified_document_serializes_byte_identical() {
 
 #[test]
 fn package_save_and_reopen_preserves_everything() {
-    require_fixture!();
     let pkg = Package::open(FIXTURE).unwrap();
     let reopened = Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap();
     assert!(reopened.doc == pkg.doc);
@@ -44,17 +32,22 @@ fn package_save_and_reopen_preserves_everything() {
 
 #[test]
 fn tree_reads_people_and_links() {
-    require_fixture!();
     let pkg = Package::open(FIXTURE).unwrap();
     let tree = Tree::from_doc(&pkg.doc);
-    assert_eq!(tree.people.len(), 115);
-    assert_eq!(tree.spouse_links.len(), 45);
-    assert_eq!(tree.parent_links.len(), 126);
-    assert_eq!(tree.media.len(), 48);
+    assert_eq!(tree.people.len(), 17);
+    assert_eq!(tree.spouse_links.len(), 5);
+    assert_eq!(tree.parent_links.len(), 20);
+    assert_eq!(tree.media.len(), 3);
 
     let home = tree.home_person.as_deref().expect("home person");
     let person = tree.person(home).expect("home person exists");
-    assert!(!person.display_name().is_empty());
+    assert_eq!(person.display_name(), "Erik Lindqvist");
+    assert!(tree.primary_photo(person).is_some());
+
+    let nora = tree.people.iter().find(|p| p.display_name() == "Nora Lindqvist").unwrap();
+    assert!(tree.parent_links.iter().filter(|l| l.child == nora.id).all(|l| l.modifier == "Adopted"));
+    let liis = tree.people.iter().find(|p| p.display_name() == "Liis Mets").unwrap();
+    assert_eq!(liis.names.len(), 2);
     for m in tree.media.values() {
         assert!(pkg.part(&m.part).is_some(), "missing media part {}", m.part);
     }
