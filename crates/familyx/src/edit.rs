@@ -16,6 +16,7 @@ const PERSON_ORDER: &[&str] = &[
     "Biology",
     "FamilyChildLinks",
     "FamilySpouseLinks",
+    "PersonCitationCollection",
     "PrimaryImageId",
     "Face",
     "IsLiving",
@@ -39,6 +40,7 @@ const FACT_ORDER: &[&str] = &[
     "FullAddress",
     "AgeAtEvent",
     "Ages",
+    "FactCitationCollection",
     "Multimedia",
     "Notes",
 ];
@@ -103,6 +105,8 @@ pub enum EditError {
     NoPerson(Id),
     #[error("no fact with id {0}")]
     NoFact(Id),
+    #[error("no source with id {0}")]
+    NoSource(Id),
     #[error("{0}")]
     Invalid(&'static str),
 }
@@ -841,6 +845,243 @@ pub fn touch_file(doc: &mut Document, last_person: Option<&str>) {
     }
 }
 
+// ---------------------------------------------------------------- sources & citations
+//
+// Element order per type, from the vendor's classes (public read/write
+// properties in declaration order; see docs/design.md, "Sources").
+
+const SOURCE_ORDER: &[&str] = &[
+    "Title",
+    "Abbreviation",
+    "Author",
+    "Publisher",
+    "ActualText",
+    "DataEvents",
+    "DataNotes",
+    "ResponsibleAgency",
+    "Repositories",
+    "Multimedia",
+    "Notes",
+    "LastSavedNotes",
+    "Privacy",
+];
+const SOURCE_REPOSITORY_ORDER: &[&str] =
+    &["CallNumber", "MultimediaType", "CustomMultimediaType", "Repository", "Notes"];
+const REPOSITORY_ORDER: &[&str] = &["Title", "FullAddress", "Notes", "LastSavedNotes", "Privacy"];
+const CITATION_ORDER: &[&str] = &[
+    "Source",
+    "Page",
+    "EventType",
+    "CustomEventType",
+    "Role",
+    "CustomRole",
+    "Url",
+    "Date",
+    "ActualTexts",
+    "Quality",
+    "CustomReference",
+    "Multimedia",
+    "Notes",
+    "Privacy",
+];
+const CITATION_COLLECTION_ORDER: &[&str] = &["Citations", "Index"];
+
+/// Fields of a source as edited in the UI.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SourceInput {
+    pub title: String,
+    pub abbreviation: String,
+    pub author: String,
+    pub publisher: String,
+    /// Plain-text note on the source.
+    pub note: String,
+    pub repository: Option<Id>,
+    pub call_number: String,
+}
+
+fn source_mut<'a>(doc: &'a mut Document, id: &str) -> EditResult<&'a mut Element> {
+    collection(doc, "SourceCollection")
+        .elements_mut()
+        .find(|s| s.name == "Source" && s.attr("Id").as_deref() == Some(id))
+        .ok_or_else(|| EditError::NoSource(id.to_string()))
+}
+
+fn write_source_fields(doc: &mut Document, id: &str, input: &SourceInput) -> EditResult<()> {
+    if let Some(repo) = &input.repository {
+        let known = doc
+            .root
+            .child("RepositoryCollection")
+            .is_some_and(|c| c.children_named("Repository").any(|r| r.attr("Id").as_deref() == Some(repo)));
+        if !known {
+            return Err(EditError::Invalid("no such repository"));
+        }
+    }
+    let source = source_mut(doc, id)?;
+    for (name, value) in [
+        ("Title", &input.title),
+        ("Abbreviation", &input.abbreviation),
+        ("Author", &input.author),
+        ("Publisher", &input.publisher),
+    ] {
+        set_child_text(source, name, value, SOURCE_ORDER);
+    }
+    write_note(source, SOURCE_ORDER, &input.note);
+    // `Repositories` has no ShouldSerialize in the app: always present
+    let list = source.ensure_child("Repositories", SOURCE_ORDER);
+    match &input.repository {
+        None => {
+            list.remove_children_where(|e| e.name == "SourceRepositoryCitation");
+        }
+        Some(repo) => {
+            if list.child("SourceRepositoryCitation").is_none() {
+                list.push(record("SourceRepositoryCitation"));
+            }
+            let entry = list.child_mut("SourceRepositoryCitation").expect("ensured above");
+            set_child_text(entry, "CallNumber", &input.call_number, SOURCE_REPOSITORY_ORDER);
+            entry.ensure_child("Repository", SOURCE_REPOSITORY_ORDER).set_text(repo);
+        }
+    }
+    source.set_attr("LastSaved", &local_now());
+    Ok(())
+}
+
+/// Add a source; returns its id.
+pub fn add_source(doc: &mut Document, input: &SourceInput) -> EditResult<Id> {
+    let mut source = Element::new("Source")
+        .with_attr("Id", &new_id())
+        .with_attr("LastSaved", &local_now())
+        .with_attr("Creation", &utc_now());
+    let id = source.attr("Id").unwrap_or_default().into_owned();
+    source.push(Element::new("Repositories"));
+    collection(doc, "SourceCollection").push(source);
+    if let Err(e) = write_source_fields(doc, &id, input) {
+        collection(doc, "SourceCollection").remove_children_where(|s| s.attr("Id").as_deref() == Some(id.as_str()));
+        return Err(e);
+    }
+    Ok(id)
+}
+
+pub fn update_source(doc: &mut Document, id: &str, input: &SourceInput) -> EditResult<()> {
+    write_source_fields(doc, id, input)
+}
+
+/// Remove a source together with every citation of it.
+pub fn delete_source(doc: &mut Document, id: &str) -> EditResult<()> {
+    source_mut(doc, id)?;
+    collection(doc, "SourceCollection")
+        .remove_children_where(|s| s.name == "Source" && s.attr("Id").as_deref() == Some(id));
+    for c in ["PeopleCollection", "RelationshipCollection"] {
+        if let Some(c) = doc.root.child_mut(c) {
+            strip_citations(c, &|cit| cit.child_text("Source").as_deref() == Some(id));
+        }
+    }
+    Ok(())
+}
+
+/// Remove matching citations below `el`, and citation collections left empty.
+fn strip_citations(el: &mut Element, matches: &dyn Fn(&Element) -> bool) {
+    if el.name.ends_with("CitationCollection") {
+        if let Some(list) = el.child_mut("Citations") {
+            list.remove_children_where(|c| c.name == "Citation" && matches(c));
+        }
+        return;
+    }
+    for child in el.elements_mut() {
+        strip_citations(child, matches);
+    }
+    el.remove_children_where(|c| {
+        c.name.ends_with("CitationCollection") && c.child("Citations").is_none_or(|l| l.child("Citation").is_none())
+    });
+}
+
+/// Add a repository; returns its id.
+pub fn add_repository(doc: &mut Document, title: &str) -> EditResult<Id> {
+    if title.trim().is_empty() {
+        return Err(EditError::Invalid("the repository needs a name"));
+    }
+    let repo = Element::new("Repository")
+        .with_attr("Id", &new_id())
+        .with_attr("LastSaved", &local_now())
+        .with_attr("Creation", &utc_now());
+    let id = repo.attr("Id").unwrap_or_default().into_owned();
+    let repo = collection(doc, "RepositoryCollection").push(repo);
+    repo.ensure_child("Title", REPOSITORY_ORDER).set_text(title.trim());
+    Ok(id)
+}
+
+/// The repository with this title, created when missing.
+pub fn find_or_add_repository(doc: &mut Document, title: &str) -> EditResult<Id> {
+    let found = doc.root.child("RepositoryCollection").and_then(|c| {
+        c.children_named("Repository")
+            .find(|r| r.child_text("Title").as_deref().map(str::trim) == Some(title.trim()))
+            .and_then(|r| r.attr("Id").map(|i| i.into_owned()))
+    });
+    match found {
+        Some(id) => Ok(id),
+        None => add_repository(doc, title),
+    }
+}
+
+/// Cite `source_id` on a person or fact (`owner_id`); returns the citation id.
+pub fn add_citation(doc: &mut Document, owner_id: &str, source_id: &str, page: &str) -> EditResult<Id> {
+    source_mut(doc, source_id)?;
+    let is_person = person_exists(doc, owner_id);
+    let (owner, name, order) = if is_person {
+        (person_mut(doc, owner_id)?, "PersonCitationCollection", PERSON_ORDER)
+    } else {
+        (fact_mut(doc, owner_id)?, "FactCitationCollection", FACT_ORDER)
+    };
+    let wrapper = owner.ensure_child(name, order);
+    if wrapper.child("Index").is_none() {
+        wrapper.ensure_child("Index", CITATION_COLLECTION_ORDER).set_text("0");
+    }
+    let mut citation = record("Citation");
+    let id = citation.attr("Id").unwrap_or_default().into_owned();
+    citation.push(text_el("Source", source_id));
+    if !page.trim().is_empty() {
+        citation.push(text_el("Page", page.trim()));
+    }
+    wrapper.ensure_child("Citations", CITATION_COLLECTION_ORDER).push(citation);
+    if is_person {
+        touch(owner);
+    }
+    Ok(id)
+}
+
+fn citation_mut<'a>(doc: &'a mut Document, citation_id: &str) -> EditResult<&'a mut Element> {
+    fn find<'b>(el: &'b mut Element, id: &str) -> Option<&'b mut Element> {
+        if el.name == "Citation" && el.attr("Id").as_deref() == Some(id) {
+            return Some(el);
+        }
+        el.elements_mut().find_map(|c| find(c, id))
+    }
+    fn has(el: &Element, id: &str) -> bool {
+        (el.name == "Citation" && el.attr("Id").as_deref() == Some(id)) || el.elements().any(|c| has(c, id))
+    }
+    let owner = ["PeopleCollection", "RelationshipCollection"]
+        .into_iter()
+        .find(|c| doc.root.child(c).is_some_and(|c| has(c, citation_id)))
+        .ok_or(EditError::Invalid("no such citation"))?;
+    find(doc.root.child_mut(owner).expect("found above"), citation_id).ok_or(EditError::Invalid("no such citation"))
+}
+
+/// Set the page / detail of a citation; empty clears it.
+pub fn set_citation_page(doc: &mut Document, citation_id: &str, page: &str) -> EditResult<()> {
+    set_child_text(citation_mut(doc, citation_id)?, "Page", page.trim(), CITATION_ORDER);
+    Ok(())
+}
+
+/// Remove one citation (not the source).
+pub fn remove_citation(doc: &mut Document, citation_id: &str) -> EditResult<()> {
+    citation_mut(doc, citation_id)?;
+    for c in ["PeopleCollection", "RelationshipCollection"] {
+        if let Some(c) = doc.root.child_mut(c) {
+            strip_citations(c, &|cit| cit.attr("Id").as_deref() == Some(citation_id));
+        }
+    }
+    Ok(())
+}
+
 /// Dangling references and inconsistencies, as human-readable messages.
 pub fn check(doc: &Document) -> Vec<String> {
     let tree = crate::model::Tree::from_doc(doc);
@@ -869,6 +1110,28 @@ pub fn check(doc: &Document) -> Vec<String> {
                     problems.push(format!("{pid}: {} refers to missing couple {fam}", l.name));
                 }
             }
+        }
+    }
+    let source_ids: std::collections::HashSet<&str> = tree.sources.iter().map(|s| s.id.as_str()).collect();
+    let mut cite = |owner: &str, citations: &[crate::model::Citation]| {
+        for c in citations.iter().filter(|c| !source_ids.contains(c.source.as_str())) {
+            problems.push(format!("{owner}: citation {} refers to missing source {:?}", c.id, c.source));
+        }
+    };
+    for p in &tree.people {
+        cite(&p.id, &p.citations);
+        for f in &p.facts {
+            cite(&f.id, &f.citations);
+        }
+    }
+    for l in &tree.spouse_links {
+        for f in &l.facts {
+            cite(&f.id, &f.citations);
+        }
+    }
+    for s in &tree.sources {
+        if let Some(r) = s.repository.as_deref().filter(|r| tree.repository(r).is_none()) {
+            problems.push(format!("source {} refers to missing repository {r}", s.id));
         }
     }
     problems

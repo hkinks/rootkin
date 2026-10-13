@@ -65,6 +65,7 @@ pub struct Fact {
     /// User-defined event name for `EVEN` facts.
     pub custom_tag: String,
     pub notes: Vec<Note>,
+    pub citations: Vec<Citation>,
 }
 
 impl Fact {
@@ -94,6 +95,50 @@ impl Note {
     pub fn plain_text(&self) -> String {
         crate::richtext::to_plain(&self.format, &self.text)
     }
+}
+
+/// A citation of a [`Source`] on a person or fact (`Citation` in a
+/// `*CitationCollection`). `source` may dangle; see `edit::check`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Citation {
+    pub id: Id,
+    pub source: Id,
+    /// Page, entry or other location within the source.
+    pub page: String,
+    /// The app's `Quality` enum (`Weak`, `Satisfactory`, `Good`, `Excellent`); empty = blank.
+    pub quality: String,
+}
+
+/// A source record (`SourceCollection/Source`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Source {
+    pub id: Id,
+    pub title: String,
+    pub abbreviation: String,
+    pub author: String,
+    pub publisher: String,
+    /// The first `Repositories/SourceRepositoryCitation`: repository id and call number.
+    pub repository: Option<Id>,
+    pub call_number: String,
+    pub notes: Vec<Note>,
+}
+
+impl Source {
+    /// Title, or abbreviation / `(untitled source)` when there is none.
+    pub fn display_title(&self) -> String {
+        [&self.title, &self.abbreviation]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "(untitled source)".into())
+    }
+}
+
+/// A repository record (`RepositoryCollection/Repository`), e.g. an archive.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Repository {
+    pub id: Id,
+    pub title: String,
 }
 
 /// Face rectangle within the primary photo, in pixels.
@@ -148,6 +193,7 @@ pub struct Person {
     pub media: Vec<Id>,
     pub face: Option<Face>,
     pub notes: Vec<Note>,
+    pub citations: Vec<Citation>,
 }
 
 impl Person {
@@ -220,6 +266,8 @@ pub struct Tree {
     pub spouse_links: Vec<SpouseLink>,
     pub parent_links: Vec<ParentChildLink>,
     pub media: HashMap<Id, Media>,
+    pub sources: Vec<Source>,
+    pub repositories: Vec<Repository>,
     pub home_person: Option<Id>,
     by_id: HashMap<Id, usize>,
 }
@@ -272,13 +320,34 @@ impl Tree {
             })
             .collect();
 
+        let sources = root
+            .child("SourceCollection")
+            .into_iter()
+            .flat_map(|c| c.children_named("Source"))
+            .map(read_source)
+            .collect();
+        let repositories = root
+            .child("RepositoryCollection")
+            .into_iter()
+            .flat_map(|c| c.children_named("Repository"))
+            .map(|r| Repository { id: attr(r, "Id"), title: r.child_text("Title").unwrap_or_default() })
+            .collect();
+
         let home_person = root.child_text("FamilyProperties/HomePersonId").filter(|s| !s.is_empty());
         let by_id = people.iter().enumerate().map(|(i, p)| (p.id.clone(), i)).collect();
-        Tree { people, spouse_links, parent_links, media, home_person, by_id }
+        Tree { people, spouse_links, parent_links, media, sources, repositories, home_person, by_id }
     }
 
     pub fn person(&self, id: &str) -> Option<&Person> {
         self.by_id.get(id).map(|&i| &self.people[i])
+    }
+
+    pub fn source(&self, id: &str) -> Option<&Source> {
+        self.sources.iter().find(|s| s.id == id)
+    }
+
+    pub fn repository(&self, id: &str) -> Option<&Repository> {
+        self.repositories.iter().find(|r| r.id == id)
     }
 
     pub fn parents(&self, id: &str) -> Vec<&str> {
@@ -376,6 +445,7 @@ fn read_person(p: &Element) -> Person {
             (face.width > 0.0 && face.height > 0.0).then_some(face)
         }),
         notes: read_notes(p),
+        citations: read_citations(p, "PersonCitationCollection"),
         media: p
             .child("Multimedia")
             .map(|m| m.children_named("string").map(Element::text).collect())
@@ -397,6 +467,35 @@ fn read_facts(owner: &Element) -> Vec<Fact> {
             details: f.child_text("Details").unwrap_or_default(),
             custom_tag: f.child_text("CustomFactTag").unwrap_or_default(),
             notes: read_notes(f),
+            citations: read_citations(f, "FactCitationCollection"),
         })
         .collect()
+}
+
+fn read_citations(owner: &Element, collection: &str) -> Vec<Citation> {
+    owner
+        .path(&format!("{collection}/Citations"))
+        .into_iter()
+        .flat_map(|c| c.children_named("Citation"))
+        .map(|c| Citation {
+            id: attr(c, "Id"),
+            source: c.child_text("Source").unwrap_or_default(),
+            page: c.child_text("Page").unwrap_or_default(),
+            quality: c.child_text("Quality").filter(|q| q != "Blank").unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn read_source(s: &Element) -> Source {
+    let first = s.path("Repositories").and_then(|r| r.child("SourceRepositoryCitation"));
+    Source {
+        id: attr(s, "Id"),
+        title: s.child_text("Title").unwrap_or_default(),
+        abbreviation: s.child_text("Abbreviation").unwrap_or_default(),
+        author: s.child_text("Author").unwrap_or_default(),
+        publisher: s.child_text("Publisher").unwrap_or_default(),
+        repository: first.and_then(|r| r.child_text("Repository")).filter(|r| !r.is_empty()),
+        call_number: first.and_then(|r| r.child_text("CallNumber")).unwrap_or_default(),
+        notes: read_notes(s),
+    }
 }

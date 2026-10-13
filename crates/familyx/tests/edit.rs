@@ -226,3 +226,168 @@ fn photos_can_be_shared_switched_and_removed() {
     assert!(!rels.contains(&part));
     assert!(Tree::from_doc(&pkg.doc).person(&leo).unwrap().primary_image.is_none());
 }
+
+fn serialized(pkg: &Package) -> String {
+    String::from_utf8_lossy(&pkg.doc.to_bytes()).into_owned()
+}
+
+fn names_of(el: &familyx::doc::Element) -> Vec<&str> {
+    el.elements().map(|e| e.name.as_str()).collect()
+}
+
+#[test]
+fn sources_and_citations_roundtrip_with_schema_order() {
+    let mut pkg = open();
+    let tree = Tree::from_doc(&pkg.doc);
+    let (sources_before, repos_before) = (tree.sources.len(), tree.repositories.len());
+    let erik = find(&tree, "Erik Lindqvist");
+    let birth = tree.person(&erik).unwrap().fact("BIRT").unwrap().id.clone();
+
+    let repo = edit::find_or_add_repository(&mut pkg.doc, "Test Archive").unwrap();
+    assert_eq!(edit::find_or_add_repository(&mut pkg.doc, "Test Archive").unwrap(), repo);
+    let source = edit::add_source(
+        &mut pkg.doc,
+        &edit::SourceInput {
+            title: "Parish register <1890>".into(),
+            author: "Parish clerk".into(),
+            publisher: "Printed 1891".into(),
+            note: "Water damaged".into(),
+            repository: Some(repo.clone()),
+            call_number: "KA 12/3".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let cit = edit::add_citation(&mut pkg.doc, &birth, &source, " p. 42 ").unwrap();
+    let person_cit = edit::add_citation(&mut pkg.doc, &erik, &source, "").unwrap();
+
+    let reopened = Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap();
+    let doc = &reopened.doc;
+
+    // source: element order and record attributes
+    let s = doc
+        .root
+        .child("SourceCollection")
+        .unwrap()
+        .children_named("Source")
+        .find(|s| s.attr("Id").as_deref() == Some(source.as_str()))
+        .unwrap();
+    assert!(s.attr("LastSaved").is_some() && s.attr("Creation").is_some());
+    assert_eq!(names_of(s), ["Title", "Author", "Publisher", "Repositories", "Notes"]);
+    let entry = s.path("Repositories/SourceRepositoryCitation").unwrap();
+    assert!(entry.attr("Id").is_some());
+    assert_eq!(names_of(entry), ["CallNumber", "Repository"]);
+
+    // fact: citations sit between the age data and the multimedia list
+    let fact = doc
+        .root
+        .child("PeopleCollection")
+        .unwrap()
+        .elements()
+        .flat_map(|p| p.path("Facts").into_iter().flat_map(|f| f.children_named("Fact")))
+        .find(|f| f.attr("Id").as_deref() == Some(birth.as_str()))
+        .unwrap();
+    let names = names_of(fact);
+    let at = |n: &str| names.iter().position(|x| *x == n).unwrap();
+    assert!(at("AgeAtEvent") < at("FactCitationCollection"));
+    assert!(names.iter().position(|x| *x == "Multimedia").is_none_or(|m| at("FactCitationCollection") < m));
+    let coll = fact.child("FactCitationCollection").unwrap();
+    assert_eq!(names_of(coll), ["Citations", "Index"]);
+    assert_eq!(coll.child_text("Index").as_deref(), Some("0"));
+    let citation = coll.path("Citations/Citation").unwrap();
+    assert!(citation.attr("Id").is_some() && citation.attr("Creation").is_some());
+    assert_eq!(names_of(citation), ["Source", "Page"]);
+
+    // person: citations between the family links and the portrait
+    let person = doc
+        .root
+        .child("PeopleCollection")
+        .unwrap()
+        .children_named("Person")
+        .find(|p| p.attr("Id").as_deref() == Some(erik.as_str()))
+        .unwrap();
+    let names = names_of(person);
+    let at = |n: &str| names.iter().position(|x| *x == n).unwrap();
+    assert!(at("FamilySpouseLinks") < at("PersonCitationCollection"));
+    assert!(at("PersonCitationCollection") < at("PrimaryImageId"));
+    assert_eq!(names_of(person.path("PersonCitationCollection/Citations/Citation").unwrap()), ["Source"]);
+
+    // the typed view
+    let tree = Tree::from_doc(doc);
+    assert_eq!(tree.sources.len(), sources_before + 1);
+    assert_eq!(tree.repositories.len(), repos_before + 1);
+    let s = tree.source(&source).unwrap();
+    assert_eq!(s.title, "Parish register <1890>");
+    assert_eq!((s.author.as_str(), s.publisher.as_str()), ("Parish clerk", "Printed 1891"));
+    assert_eq!(s.repository.as_deref(), Some(repo.as_str()));
+    assert_eq!(s.call_number, "KA 12/3");
+    assert_eq!(s.notes[0].text, "Water damaged");
+    let p = tree.person(&erik).unwrap();
+    let fact_cit = &p.fact("BIRT").unwrap().citations[0];
+    assert_eq!(
+        (fact_cit.id.as_str(), fact_cit.source.as_str(), fact_cit.page.as_str()),
+        (cit.as_str(), source.as_str(), "p. 42")
+    );
+    assert_eq!(p.citations[0].id, person_cit);
+    assert_eq!(edit::check(doc), Vec::<String>::new());
+}
+
+#[test]
+fn updating_and_deleting_sources_and_citations() {
+    let mut pkg = open();
+    let tree = Tree::from_doc(&pkg.doc);
+    let erik = find(&tree, "Erik Lindqvist");
+    let birth = tree.person(&erik).unwrap().fact("BIRT").unwrap().id.clone();
+    let input = |title: &str| edit::SourceInput { title: title.into(), ..Default::default() };
+    let source = edit::add_source(&mut pkg.doc, &input("A")).unwrap();
+    let other = edit::add_source(&mut pkg.doc, &input("B")).unwrap();
+    let c1 = edit::add_citation(&mut pkg.doc, &birth, &source, "1").unwrap();
+    edit::add_citation(&mut pkg.doc, &erik, &source, "2").unwrap();
+    let c3 = edit::add_citation(&mut pkg.doc, &birth, &other, "3").unwrap();
+
+    edit::update_source(&mut pkg.doc, &source, &edit::SourceInput { author: "Z".into(), ..input("A2") }).unwrap();
+    edit::set_citation_page(&mut pkg.doc, &c1, "11").unwrap();
+    let tree = Tree::from_doc(&pkg.doc);
+    assert_eq!(
+        (tree.source(&source).unwrap().title.as_str(), tree.source(&source).unwrap().author.as_str()),
+        ("A2", "Z")
+    );
+    assert_eq!(tree.person(&erik).unwrap().fact("BIRT").unwrap().citations[0].page, "11");
+
+    // deleting a source drops its citations everywhere, and empty collections
+    edit::delete_source(&mut pkg.doc, &source).unwrap();
+    let tree = Tree::from_doc(&pkg.doc);
+    assert!(tree.source(&source).is_none() && tree.source(&other).is_some());
+    let p = tree.person(&erik).unwrap();
+    assert!(p.citations.is_empty());
+    assert_eq!(p.fact("BIRT").unwrap().citations.len(), 1);
+    assert!(!serialized(&pkg).contains("PersonCitationCollection"));
+    assert_eq!(edit::check(&pkg.doc), Vec::<String>::new());
+
+    edit::remove_citation(&mut pkg.doc, &c3).unwrap();
+    assert!(Tree::from_doc(&pkg.doc).person(&erik).unwrap().fact("BIRT").unwrap().citations.is_empty());
+    assert!(!serialized(&pkg).contains("FactCitationCollection"));
+    assert!(edit::remove_citation(&mut pkg.doc, &c3).is_err());
+    assert!(edit::add_citation(&mut pkg.doc, &birth, "nope", "").is_err());
+    assert!(edit::delete_source(&mut pkg.doc, "nope").is_err());
+}
+
+#[test]
+fn check_reports_citations_to_missing_sources() {
+    let mut pkg = open();
+    let tree = Tree::from_doc(&pkg.doc);
+    let erik = find(&tree, "Erik Lindqvist");
+    let before = edit::check(&pkg.doc);
+    let source =
+        edit::add_source(&mut pkg.doc, &edit::SourceInput { title: "A".into(), ..Default::default() }).unwrap();
+    edit::add_citation(&mut pkg.doc, &erik, &source, "").unwrap();
+    // remove the source record only, leaving the citation dangling
+    pkg.doc
+        .root
+        .child_mut("SourceCollection")
+        .unwrap()
+        .remove_children_where(|s| s.attr("Id").as_deref() == Some(source.as_str()));
+    let problems = edit::check(&pkg.doc);
+    assert_eq!(problems.len(), before.len() + 1, "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("missing source")));
+}
