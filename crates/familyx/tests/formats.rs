@@ -165,15 +165,32 @@ fn new_files_and_the_example_are_not_password_protected() {
 }
 
 #[test]
-fn legacy_schema_is_detected_but_not_migrated() {
+fn legacy_schema_is_migrated_on_open() {
     let current = Package::open(format!("{DATA}/example.familyx")).unwrap();
     assert!(!current.has_legacy_schema());
+    assert!(current.migration().is_none());
+    // An old tree whose only trace of the old schema is an empty list is converted completely.
     let old_xml = "\u{feff}<Family FamilyId=\"x\"><PeopleCollection><Person Id=\"p\"><Relationships /></Person>\
                    </PeopleCollection></Family>";
     let blob = codec::encode_part(old_xml.as_bytes(), SourceFormat::Family4);
     let pkg = Package::from_bytes(&old_package("family4", &blob)).unwrap();
+    assert!(pkg.migration().is_some());
+    assert!(!pkg.has_legacy_schema());
+    assert_eq!(pkg.doc.root.child_text("FileProperties/Version").as_deref(), Some("14.8"));
+    let reopened = Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap();
+    assert!(reopened.migration().is_none());
+    assert!(reopened.doc == pkg.doc);
+}
+
+#[test]
+fn unconvertible_legacy_elements_are_kept_and_flagged() {
+    // `LDSFacts` have no conversion: they stay verbatim and keep `has_legacy_schema` true.
+    let old_xml = "\u{feff}<Family FamilyId=\"x\"><PeopleCollection><Person Id=\"p\"><LDSFacts /></Person>\
+                   </PeopleCollection></Family>";
+    let blob = codec::encode_part(old_xml.as_bytes(), SourceFormat::Family4);
+    let pkg = Package::from_bytes(&old_package("family4", &blob)).unwrap();
     assert!(pkg.has_legacy_schema());
-    // Preserved verbatim on save.
     let reopened = Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap();
     assert!(reopened.has_legacy_schema());
+    assert!(reopened.doc == pkg.doc);
 }

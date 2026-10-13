@@ -11,7 +11,7 @@ use crate::doc::{Document, Element};
 use crate::model::{Date, Gender, Id};
 
 // Child element order per type, derived from files the app writes.
-const PERSON_ORDER: &[&str] = &[
+pub(crate) const PERSON_ORDER: &[&str] = &[
     "PersonNameCollection",
     "Biology",
     "FamilyChildLinks",
@@ -25,7 +25,7 @@ const PERSON_ORDER: &[&str] = &[
 ];
 const NAME_ORDER: &[&str] =
     &["Names", "SurnamePrefix", "Surname", "Suffix", "Nickname", "Notes", "IsPrimary", "NameType"];
-const FACT_ORDER: &[&str] = &[
+pub(crate) const FACT_ORDER: &[&str] = &[
     "Tag",
     "CustomFactTag",
     "Details",
@@ -46,7 +46,7 @@ const FACT_ORDER: &[&str] = &[
 const FACT_DATE_ORDER: &[&str] =
     &["StartDay", "StartMonth", "StartYear", "EndDay", "EndMonth", "EndYear", "DateDescriptor", "StartTime", "Text"];
 const PLACE_ORDER: &[&str] = &["Description", "Longitude", "Latitude", "BoundingBox"];
-const FAMILY_ORDER: &[&str] = &[
+pub(crate) const FAMILY_ORDER: &[&str] = &[
     "AuthorCollection",
     "PeopleCollection",
     "SourceCollection",

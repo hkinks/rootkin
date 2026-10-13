@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::codec::{SourceFormat, PART_NAMES};
 use crate::doc::{Document, Element};
 use crate::model::Id;
-use crate::{codec, edit, protection, Error, Result};
+use crate::{codec, edit, migrate, protection, Error, Result};
 
 const FAMILY_PART: &str = "family8";
 const FAMILY_CONTENT_TYPE: &str = "application/vnd.chronoplexsoftware.familyx";
@@ -17,7 +17,8 @@ const FAMILY_CONTENT_TYPE: &str = "application/vnd.chronoplexsoftware.familyx";
 /// or `family8` with the V1/V2 encryption) are read transparently, but saving
 /// always writes the current format: a `family8` V3 part, with the package
 /// metadata (`[Content_Types].xml`, `_rels/.rels`) pointing at it. See
-/// [`Package::source_format`].
+/// [`Package::source_format`]. Trees in the old pre-link schema are converted
+/// to the current schema on open (see [`crate::migrate`], [`Package::migration`]).
 #[derive(Clone)]
 pub struct Package {
     pub doc: Document,
@@ -26,6 +27,7 @@ pub struct Package {
     /// Position of the tree part among the entries, so saving keeps the order.
     family_index: usize,
     source: SourceFormat,
+    migration: Option<Box<migrate::Report>>,
 }
 
 const CONTENT_TYPES: &str = "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
@@ -43,6 +45,7 @@ impl Package {
             parts: vec![("[Content_Types].xml".into(), CONTENT_TYPES.as_bytes().to_vec())],
             family_index: 2,
             source: SourceFormat::CURRENT,
+            migration: None,
         };
         let rels = "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?>\
 <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\" />";
@@ -147,35 +150,17 @@ impl Package {
         protection::document_is_protected(&self.doc)
     }
 
-    /// True if the tree still uses elements of the pre-link schema (per-person
-    /// `Relationships`, `Photos`, `Story`, root-level `PhotoCollection`, ...).
-    /// The app converts those on load; this crate neither shows nor migrates them
-    /// (they are preserved verbatim), so such a tree can look incomplete.
+    /// True if the tree still contains elements of the pre-link schema that
+    /// [`migrate`](crate::migrate) could not convert (`LDSFacts`, database-backed
+    /// `Story`, unconvertible `Relationships`, ...). They are kept verbatim.
     pub fn has_legacy_schema(&self) -> bool {
-        const ROOT: [&str; 5] = [
-            "Author",
-            "PhotoCollection",
-            "AttachmentCollection",
-            "AudioVideoCollection",
-            "PackagedFilePropertiesCollection",
-        ];
-        const PERSON: [&str; 9] = [
-            "Relationships",
-            "Photos",
-            "Attachments",
-            "AudioVideo",
-            "LDSFacts",
-            "Story",
-            "Name",
-            "AlternativeName",
-            "ContactAddress",
-        ];
-        self.doc.root.elements().any(|e| ROOT.contains(&e.name.as_str()))
-            || self
-                .doc
-                .root
-                .child("PeopleCollection")
-                .is_some_and(|c| c.elements().any(|p| p.elements().any(|e| PERSON.contains(&e.name.as_str()))))
+        migrate::has_legacy_elements(&self.doc)
+    }
+
+    /// What schema migration did when this package was opened; `None` if the
+    /// tree already used the current schema.
+    pub fn migration(&self) -> Option<&migrate::Report> {
+        self.migration.as_deref()
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
@@ -204,7 +189,10 @@ impl Package {
                 doc.root.set_attr("FamilyId", &family_id);
             }
         }
-        let mut pkg = Package { doc, parts: entries, family_index, source };
+        // Old schema (per-person relationships, photos, ...) -> current schema.
+        let part = |name: &str| entries.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, d)| d.clone());
+        let migration = migrate::migrate(&mut doc, &part).map(Box::new);
+        let mut pkg = Package { doc, parts: entries, family_index, source, migration };
         if source.part_name() != FAMILY_PART {
             pkg.retarget_tree_part(source.part_name())?;
         }
