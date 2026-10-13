@@ -563,6 +563,20 @@ pub fn unlink_parent(doc: &mut Document, child: &str, parent: &str) -> EditResul
     Ok(())
 }
 
+/// Add an existing photo to a person's photos (primary if they have none).
+pub(crate) fn link_photo(doc: &mut Document, person_id: &str, media_id: &str) -> EditResult<()> {
+    let person = person_mut(doc, person_id)?;
+    let list = person.ensure_child("Multimedia", PERSON_ORDER);
+    if !list.children_named("string").any(|s| s.text() == media_id) {
+        list.push(text_el("string", media_id));
+    }
+    if person.child("PrimaryImageId").is_none() {
+        person.ensure_child("PrimaryImageId", PERSON_ORDER).set_text(media_id);
+    }
+    touch(person);
+    Ok(())
+}
+
 /// Register a `PackagedFile` and make it `person_id`'s primary image.
 pub(crate) fn attach_photo(doc: &mut Document, person_id: &str, media_id: &str, file: Element) -> EditResult<()> {
     let person = person_mut(doc, person_id)?;
@@ -605,6 +619,225 @@ fn remove_spouse_link(doc: &mut Document, link_id: &str) {
                 links.remove_children_where(|l| l.attr("FamilyId").as_deref() == Some(link_id));
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------- notes
+
+const NOTE_ORDER: &[&str] = &["Format", "Text", "IsStoryNote", "IsChartNote"];
+
+/// Set the owner's first note to plain `text`; empty text removes all notes.
+fn write_note(owner: &mut Element, order: &[&str], text: &str) {
+    if text.trim().is_empty() {
+        owner.remove_children_where(|e| e.name == "Notes");
+        return;
+    }
+    let notes = owner.ensure_child("Notes", order);
+    let list = notes.ensure_child("Notes", &["Notes", "Index"]);
+    if list.child("Note").is_none() {
+        let mut note = record("Note");
+        note.push(text_el("Format", "text/plain"));
+        note.push(Element::new("Text"));
+        note.push(text_el("IsStoryNote", "false"));
+        note.push(text_el("IsChartNote", "false"));
+        list.push(note);
+    }
+    let note = list.child_mut("Note").expect("ensured above");
+    note.ensure_child("Format", NOTE_ORDER).set_text("text/plain");
+    note.ensure_child("Text", NOTE_ORDER).set_text(text);
+    if notes.child("Index").is_none() {
+        notes.ensure_child("Index", &["Notes", "Index"]).set_text("0");
+    }
+}
+
+/// Replace the person's (first) note with plain text; empty removes notes.
+pub fn set_person_note(doc: &mut Document, person_id: &str, text: &str) -> EditResult<()> {
+    let person = person_mut(doc, person_id)?;
+    write_note(person, PERSON_ORDER, text);
+    touch(person);
+    Ok(())
+}
+
+pub fn set_fact_note(doc: &mut Document, fact_id: &str, text: &str) -> EditResult<()> {
+    write_note(fact_mut(doc, fact_id)?, FACT_ORDER, text);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- names
+
+fn name_mut<'a>(person: &'a mut Element, name_id: &str) -> EditResult<&'a mut Element> {
+    person
+        .path_mut("PersonNameCollection/Names")
+        .and_then(|names| names.elements_mut().find(|n| n.attr("Id").as_deref() == Some(name_id)))
+        .ok_or(EditError::Invalid("no such name"))
+}
+
+/// Update an alternate name; `name_type` must be one of the app's `NameType`
+/// values (see docs/design.md) or empty.
+pub fn update_name(
+    doc: &mut Document,
+    person_id: &str,
+    name_id: &str,
+    given: &str,
+    surname: &str,
+    name_type: &str,
+) -> EditResult<()> {
+    let person = person_mut(doc, person_id)?;
+    let name = name_mut(person, name_id)?;
+    name.ensure_child("Names", NAME_ORDER).set_text(given);
+    name.ensure_child("Surname", NAME_ORDER).set_text(surname);
+    set_child_text(name, "NameType", name_type, NAME_ORDER);
+    touch(person);
+    Ok(())
+}
+
+/// Remove a non-primary name.
+pub fn remove_name(doc: &mut Document, person_id: &str, name_id: &str) -> EditResult<()> {
+    let person = person_mut(doc, person_id)?;
+    if name_mut(person, name_id)?.child_text("IsPrimary").as_deref() == Some("true") {
+        return Err(EditError::Invalid("the primary name cannot be removed"));
+    }
+    if let Some(names) = person.path_mut("PersonNameCollection/Names") {
+        names.remove_children_where(|n| n.attr("Id").as_deref() == Some(name_id));
+    }
+    touch(person);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- couples & order
+
+/// `status` is one of the app's `SpouseRelationshipStatus` values or empty.
+pub fn set_couple_status(doc: &mut Document, link_id: &str, status: &str) -> EditResult<()> {
+    let link = collection(doc, "RelationshipCollection")
+        .elements_mut()
+        .find(|l| l.attr("Id").as_deref() == Some(link_id) && l.attr("xsi:type").as_deref() == Some("SpouseLink"))
+        .ok_or(EditError::Invalid("no such couple"))?;
+    set_child_text(
+        link,
+        "SpouseRelationshipStatus",
+        status,
+        &["Facts", "SpouseRelationshipStatus", "NumberOfChildren"],
+    );
+    Ok(())
+}
+
+/// Swap the link matching `is_target` with its neighbour among links matching
+/// `in_group` (`delta` -1 = earlier, +1 = later). Returns false at the ends.
+fn move_link(
+    doc: &mut Document,
+    in_group: impl Fn(&Element) -> bool,
+    is_target: impl Fn(&Element) -> bool,
+    delta: i32,
+) -> bool {
+    let coll = collection(doc, "RelationshipCollection");
+    let group: Vec<usize> = coll
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| matches!(n, crate::doc::Node::Element(e) if in_group(e)))
+        .map(|(i, _)| i)
+        .collect();
+    let Some(pos) =
+        group.iter().position(|&i| matches!(&coll.children[i], crate::doc::Node::Element(e) if is_target(e)))
+    else {
+        return false;
+    };
+    let Some(&other) = group.get((pos as i32 + delta) as usize) else { return false };
+    coll.children.swap(group[pos], other);
+    true
+}
+
+/// Move `child` earlier (`delta` -1) or later (+1) in `parent`'s children.
+pub fn move_child(doc: &mut Document, parent: &str, child: &str, delta: i32) -> EditResult<bool> {
+    let is_parent_link = |l: &Element| {
+        l.attr("xsi:type").as_deref() == Some("ParentChildLink") && l.attr("Person1Id").as_deref() == Some(parent)
+    };
+    Ok(move_link(doc, is_parent_link, |l| is_parent_link(l) && l.attr("Person2Id").as_deref() == Some(child), delta))
+}
+
+/// Move the couple of `person` and `spouse` earlier or later among `person`'s couples.
+pub fn move_spouse(doc: &mut Document, person: &str, spouse: &str, delta: i32) -> EditResult<bool> {
+    let involves =
+        |l: &Element, p: &str| l.attr("Person1Id").as_deref() == Some(p) || l.attr("Person2Id").as_deref() == Some(p);
+    let is_couple = |l: &Element| l.attr("xsi:type").as_deref() == Some("SpouseLink") && involves(l, person);
+    Ok(move_link(doc, is_couple, |l| is_couple(l) && involves(l, spouse), delta))
+}
+
+// ---------------------------------------------------------------- custom events
+
+/// Add a user-named event (stored as `EVEN` with `CustomFactTag`); returns its id.
+pub fn add_custom_fact(doc: &mut Document, person_id: &str, name: &str, input: &FactInput) -> EditResult<Id> {
+    if name.trim().is_empty() {
+        return Err(EditError::Invalid("the event needs a name"));
+    }
+    let id = add_fact(doc, person_id, "EVEN", input)?;
+    fact_mut(doc, &id)?.ensure_child("CustomFactTag", FACT_ORDER).set_text(name.trim());
+    Ok(id)
+}
+
+// ---------------------------------------------------------------- photos
+
+pub fn set_primary_photo(doc: &mut Document, person_id: &str, media_id: &str) -> EditResult<()> {
+    let person = person_mut(doc, person_id)?;
+    let has = person.child("Multimedia").is_some_and(|m| m.children_named("string").any(|s| s.text() == media_id));
+    if !has {
+        return Err(EditError::Invalid("that photo is not attached to this person"));
+    }
+    person.ensure_child("PrimaryImageId", PERSON_ORDER).set_text(media_id);
+    // the face crop belongs to the previous photo
+    person.remove_children_where(|e| e.name == "Face");
+    touch(person);
+    Ok(())
+}
+
+/// Detach a photo from a person. Returns true if no person or fact refers to
+/// it anymore (the caller may then drop the file, see `Package::remove_photo`).
+pub fn detach_photo(doc: &mut Document, person_id: &str, media_id: &str) -> EditResult<bool> {
+    let person = person_mut(doc, person_id)?;
+    if let Some(list) = person.child_mut("Multimedia") {
+        list.remove_children_where(|s| s.name == "string" && s.text() == media_id);
+    }
+    if person.child_text("PrimaryImageId").as_deref() == Some(media_id) {
+        let next = person.child("Multimedia").and_then(|m| m.children_named("string").next()).map(Element::text);
+        person.remove_children_where(|e| e.name == "Face");
+        match next {
+            Some(next) => person.ensure_child("PrimaryImageId", PERSON_ORDER).set_text(&next),
+            None => {
+                person.remove_children_where(|e| e.name == "PrimaryImageId");
+            }
+        }
+    }
+    touch(person);
+    fn refers(el: &Element, id: &str) -> bool {
+        ((el.name == "string" || el.name == "PrimaryImageId") && el.text() == id)
+            || el.elements().any(|c| refers(c, id))
+    }
+    let used = ["PeopleCollection", "RelationshipCollection", "SourceCollection"]
+        .iter()
+        .any(|c| doc.root.child(c).is_some_and(|c| refers(c, media_id)));
+    Ok(!used)
+}
+
+pub(crate) fn remove_packaged_file(doc: &mut Document, media_id: &str) -> Option<String> {
+    let files = doc.root.child_mut("PackagedFileCollection")?;
+    let path = files.elements().find(|f| f.attr("Id").as_deref() == Some(media_id))?.child_text("RelativePath");
+    files.remove_children_where(|f| f.attr("Id").as_deref() == Some(media_id));
+    path.map(|p| p.replace('\\', "/"))
+}
+
+// ---------------------------------------------------------------- file
+
+/// Record save time and the person last worked on, as the app does on save.
+pub fn touch_file(doc: &mut Document, last_person: Option<&str>) {
+    let props = doc.root.ensure_child("FileProperties", FAMILY_ORDER);
+    if props.child("LastSavedDate").is_some() {
+        props.ensure_child("LastSavedDate", &[]).set_text(&utc_now());
+    }
+    if let Some(p) = last_person {
+        doc.root
+            .ensure_child("FamilyProperties", FAMILY_ORDER)
+            .ensure_child("LastSavedPersonId", &["LastSavedPersonId", "HomePersonId"])
+            .set_text(p);
     }
 }
 

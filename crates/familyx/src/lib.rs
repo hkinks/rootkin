@@ -11,6 +11,7 @@ pub mod doc;
 pub mod edit;
 pub mod model;
 pub mod package;
+pub mod richtext;
 
 pub use package::Package;
 

@@ -76,6 +76,30 @@ impl Package {
         Ok(media_id)
     }
 
+    /// Detach a photo from a person and, if nothing else uses it, delete the
+    /// file from the package.
+    pub fn remove_photo(&mut self, person_id: &str, media_id: &str) -> Result<()> {
+        let unused =
+            edit::detach_photo(&mut self.doc, person_id, media_id).map_err(|e| Error::Format(e.to_string()))?;
+        if unused {
+            if let Some(part) = edit::remove_packaged_file(&mut self.doc, media_id) {
+                self.parts.retain(|(n, _)| *n != part);
+                if let Some((_, data)) = self.parts.iter_mut().find(|(n, _)| n == RELS_PART) {
+                    let mut rels = Document::parse(data)?;
+                    let target = format!("/{part}");
+                    rels.root.remove_children_where(|r| r.attr("Target").as_deref() == Some(target.as_str()));
+                    *data = rels.to_bytes();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Attach a photo already in the package to another person.
+    pub fn share_photo(&mut self, person_id: &str, media_id: &str) -> Result<()> {
+        edit::link_photo(&mut self.doc, person_id, media_id).map_err(|e| Error::Format(e.to_string()))
+    }
+
     fn add_relationship(&mut self, target: &str) -> Result<()> {
         let (_, data) = self
             .parts

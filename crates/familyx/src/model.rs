@@ -60,12 +60,47 @@ pub struct Fact {
     pub date: Date,
     pub place: String,
     pub details: String,
+    /// User-defined event name for `EVEN` facts.
+    pub custom_tag: String,
+    pub notes: Vec<Note>,
 }
 
 impl Fact {
     pub fn label(&self) -> &str {
-        fact_label(&self.tag)
+        if self.custom_tag.is_empty() {
+            fact_label(&self.tag)
+        } else {
+            &self.custom_tag
+        }
     }
+}
+
+/// A note as stored in `Notes/Notes/Note`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Note {
+    pub id: Id,
+    /// `text/plain`, `text/html` or `text/richtext` (RTF).
+    pub format: String,
+    pub text: String,
+}
+
+impl Note {
+    pub fn is_rich(&self) -> bool {
+        crate::richtext::is_rich(&self.format)
+    }
+
+    pub fn plain_text(&self) -> String {
+        crate::richtext::to_plain(&self.format, &self.text)
+    }
+}
+
+/// Face rectangle within the primary photo, in pixels.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Face {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 pub fn fact_label(tag: &str) -> &str {
@@ -96,6 +131,8 @@ pub struct Person {
     pub facts: Vec<Fact>,
     pub primary_image: Option<Id>,
     pub media: Vec<Id>,
+    pub face: Option<Face>,
+    pub notes: Vec<Note>,
 }
 
 impl Person {
@@ -234,10 +271,8 @@ impl Tree {
     }
 
     pub fn children(&self, id: &str) -> Vec<&str> {
-        let mut kids: Vec<&str> =
-            self.parent_links.iter().filter(|l| l.parent == id).map(|l| l.child.as_str()).collect();
-        kids.sort_by_key(|k| self.person(k).and_then(|p| p.fact("BIRT")).and_then(|f| f.date.year));
-        kids
+        // file order, which the user can rearrange (see edit::move_child)
+        self.parent_links.iter().filter(|l| l.parent == id).map(|l| l.child.as_str()).collect()
     }
 
     pub fn spouse_links_of(&self, id: &str) -> Vec<&SpouseLink> {
@@ -259,6 +294,19 @@ fn attr(el: &Element, name: &str) -> String {
 
 fn text_opt<T: std::str::FromStr>(el: &Element, path: &str) -> Option<T> {
     el.child_text(path).and_then(|t| t.trim().parse().ok())
+}
+
+fn read_notes(owner: &Element) -> Vec<Note> {
+    owner
+        .path("Notes/Notes")
+        .into_iter()
+        .flat_map(|n| n.children_named("Note"))
+        .map(|n| Note {
+            id: attr(n, "Id"),
+            format: n.child_text("Format").unwrap_or_else(|| "text/plain".into()),
+            text: n.child_text("Text").unwrap_or_default(),
+        })
+        .collect()
 }
 
 fn read_date(d: Option<&Element>) -> Date {
@@ -303,6 +351,16 @@ fn read_person(p: &Element) -> Person {
         is_living: p.child_text("IsLiving").as_deref() == Some("true"),
         facts: read_facts(p),
         primary_image: p.child_text("PrimaryImageId").filter(|s| !s.is_empty()),
+        face: p.child("Face").and_then(|f| {
+            let face = Face {
+                x: text_opt(f, "X")?,
+                y: text_opt(f, "Y")?,
+                width: text_opt(f, "Width")?,
+                height: text_opt(f, "Height")?,
+            };
+            (face.width > 0.0 && face.height > 0.0).then_some(face)
+        }),
+        notes: read_notes(p),
         media: p
             .child("Multimedia")
             .map(|m| m.children_named("string").map(Element::text).collect())
@@ -322,6 +380,8 @@ fn read_facts(owner: &Element) -> Vec<Fact> {
             date: read_date(f.child("FactDate")),
             place: f.child_text("PlaceDetails/Description").unwrap_or_default(),
             details: f.child_text("Details").unwrap_or_default(),
+            custom_tag: f.child_text("CustomFactTag").unwrap_or_default(),
+            notes: read_notes(f),
         })
         .collect()
 }

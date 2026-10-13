@@ -139,3 +139,90 @@ fn marriage_fact_on_new_couple() {
     edit::delete_fact(&mut pkg.doc, &fact).unwrap();
     assert!(Tree::from_doc(&pkg.doc).spouse_links.iter().find(|l| l.id == couple).unwrap().facts.is_empty());
 }
+
+fn find(tree: &Tree, name: &str) -> String {
+    tree.people.iter().find(|p| p.display_name() == name).unwrap().id.clone()
+}
+
+#[test]
+fn notes_on_people_and_facts() {
+    let mut pkg = open();
+    let tree = Tree::from_doc(&pkg.doc);
+    let erik = find(&tree, "Erik Lindqvist");
+    let birth = tree.person(&erik).unwrap().fact("BIRT").unwrap().id.clone();
+    edit::set_person_note(&mut pkg.doc, &erik, "Loves sailing & <boats>").unwrap();
+    edit::set_fact_note(&mut pkg.doc, &birth, "Born at home").unwrap();
+    let reopened = Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap();
+    let tree = Tree::from_doc(&reopened.doc);
+    let p = tree.person(&erik).unwrap();
+    assert_eq!(p.notes[0].plain_text(), "Loves sailing & <boats>");
+    assert_eq!(p.fact("BIRT").unwrap().notes[0].text, "Born at home");
+    let mut doc = reopened.doc;
+    edit::set_person_note(&mut doc, &erik, "").unwrap();
+    assert!(Tree::from_doc(&doc).person(&erik).unwrap().notes.is_empty());
+}
+
+#[test]
+fn alternate_names_custom_events_and_couple_status() {
+    let mut pkg = open();
+    let tree = Tree::from_doc(&pkg.doc);
+    let liis = find(&tree, "Liis Mets");
+    let alt = tree.person(&liis).unwrap().names.iter().find(|n| !n.is_primary).unwrap().id.clone();
+    edit::update_name(&mut pkg.doc, &liis, &alt, "Liisa", "Lindqvist", "Married").unwrap();
+    let primary = tree.person(&liis).unwrap().primary_name().unwrap().id.clone();
+    assert!(edit::remove_name(&mut pkg.doc, &liis, &primary).is_err());
+
+    let fid = edit::add_custom_fact(&mut pkg.doc, &liis, "Emigrated", &FactInput::default()).unwrap();
+    let karl = find(&tree, "Karl Lindqvist");
+    let couple = tree.spouse_links.iter().find(|l| l.other(&karl) == liis).unwrap().id.clone();
+    edit::set_couple_status(&mut pkg.doc, &couple, "Deceased").unwrap();
+
+    let tree = Tree::from_doc(&pkg.doc);
+    let p = tree.person(&liis).unwrap();
+    assert!(p.names.iter().any(|n| n.given == "Liisa" && n.name_type == "Married"));
+    assert_eq!(p.facts.iter().find(|f| f.id == fid).unwrap().label(), "Emigrated");
+    assert_eq!(tree.spouse_links.iter().find(|l| l.id == couple).unwrap().status, "Deceased");
+    edit::remove_name(&mut pkg.doc, &liis, &alt).unwrap();
+    assert_eq!(Tree::from_doc(&pkg.doc).person(&liis).unwrap().names.len(), 1);
+}
+
+#[test]
+fn reorder_children() {
+    let mut pkg = open();
+    let tree = Tree::from_doc(&pkg.doc);
+    let erik = find(&tree, "Erik Lindqvist");
+    let kids: Vec<String> = tree.children(&erik).iter().map(|s| s.to_string()).collect();
+    assert_eq!(kids.len(), 2);
+    assert!(edit::move_child(&mut pkg.doc, &erik, &kids[1], -1).unwrap());
+    assert!(!edit::move_child(&mut pkg.doc, &erik, &kids[1], -1).unwrap());
+    let tree = Tree::from_doc(&pkg.doc);
+    assert_eq!(tree.children(&erik), vec![kids[1].as_str(), kids[0].as_str()]);
+    assert_eq!(edit::check(&pkg.doc), Vec::<String>::new());
+}
+
+#[test]
+fn photos_can_be_shared_switched_and_removed() {
+    let mut pkg = open();
+    let tree = Tree::from_doc(&pkg.doc);
+    let erik = find(&tree, "Erik Lindqvist");
+    let leo = find(&tree, "Leo Lindqvist");
+    let first = tree.person(&erik).unwrap().primary_image.clone().unwrap();
+    let second = pkg.add_photo(&erik, vec![1, 2, 3], "png", "second.png").unwrap();
+    edit::set_primary_photo(&mut pkg.doc, &erik, &first).unwrap();
+    pkg.share_photo(&leo, &second).unwrap();
+
+    // still used by Leo: file stays
+    pkg.remove_photo(&erik, &second).unwrap();
+    let tree = Tree::from_doc(&pkg.doc);
+    let part = tree.media[&second].part.clone();
+    assert!(pkg.part(&part).is_some());
+    assert_eq!(tree.person(&erik).unwrap().primary_image.as_deref(), Some(first.as_str()));
+
+    // last user gone: file, PackagedFile and relationship are removed
+    pkg.remove_photo(&leo, &second).unwrap();
+    assert!(pkg.part(&part).is_none());
+    assert!(!Tree::from_doc(&pkg.doc).media.contains_key(&second));
+    let rels = String::from_utf8(pkg.part("_rels/.rels").unwrap().to_vec()).unwrap();
+    assert!(!rels.contains(&part));
+    assert!(Tree::from_doc(&pkg.doc).person(&leo).unwrap().primary_image.is_none());
+}
