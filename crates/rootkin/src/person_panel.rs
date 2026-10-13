@@ -21,48 +21,26 @@ pub struct PersonForm {
 struct FactForm {
     id: Id,
     tag: String,
-    year: String,
-    month: String,
-    day: String,
-    about: bool,
+    date: String,
     place: String,
     details: String,
 }
 
 impl FactForm {
     fn new(f: &Fact) -> Self {
-        let num = |v: Option<i64>| v.map(|v| v.to_string()).unwrap_or_default();
         FactForm {
             id: f.id.clone(),
             tag: f.tag.clone(),
-            year: num(f.date.year.map(i64::from)),
-            month: num(f.date.month.map(i64::from)),
-            day: num(f.date.day.map(i64::from)),
-            about: f.date.descriptor == "About",
+            date: f.date.display(),
             place: f.place.clone(),
             details: f.details.clone(),
         }
     }
 
-    /// Parsed input, or `None` if a date part is invalid.
-    fn input(&self) -> Option<FactInput> {
-        fn part<T: std::str::FromStr + PartialOrd>(
-            s: &str,
-            range: std::ops::RangeInclusive<T>,
-        ) -> Result<Option<T>, ()> {
-            let s = s.trim();
-            if s.is_empty() {
-                return Ok(None);
-            }
-            s.parse().ok().filter(|v| range.contains(v)).map(Some).ok_or(())
-        }
-        Some(FactInput {
-            date: Date {
-                year: part(&self.year, 1..=9999).ok()?,
-                month: part(&self.month, 1..=12).ok()?,
-                day: part(&self.day, 1..=31).ok()?,
-                descriptor: if self.about { "About" } else { "Span" }.into(),
-            },
+    /// Parsed input, or the date error.
+    fn input(&self) -> Result<FactInput, String> {
+        Ok(FactInput {
+            date: Date::parse(&self.date)?,
             place: self.place.trim().to_string(),
             details: self.details.trim().to_string(),
         })
@@ -102,7 +80,6 @@ enum Action {
 fn fact_editor(ui: &mut egui::Ui, form: &mut FactForm, original: Option<&Fact>) -> Option<Action> {
     let mut commit = false;
     let mut action = None;
-    let valid = form.input().is_some();
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(fact_label(&form.tag)).strong());
@@ -112,19 +89,22 @@ fn fact_editor(ui: &mut egui::Ui, form: &mut FactForm, original: Option<&Fact>) 
                 }
             });
         });
-        ui.horizontal(|ui| {
-            let field = |ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32| {
-                let r = ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(width));
-                r.lost_focus()
-            };
-            commit |= field(ui, &mut form.year, "year", 44.0);
-            commit |= field(ui, &mut form.month, "mm", 30.0);
-            commit |= field(ui, &mut form.day, "dd", 30.0);
-            commit |= ui.checkbox(&mut form.about, "about").changed();
-            if !valid {
-                ui.colored_label(Color32::LIGHT_RED, "invalid date");
+        let parsed = form.input();
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut form.date)
+                .hint_text("date, e.g. 12 Mar 1950, abt 1900, 1900-1910")
+                .desired_width(f32::INFINITY),
+        );
+        commit |= r.lost_focus();
+        match &parsed {
+            Err(e) => {
+                ui.colored_label(Color32::LIGHT_RED, e);
             }
-        });
+            Ok(input) if r.has_focus() && !input.date.is_empty() => {
+                ui.weak(format!("→ {}", input.date.display()));
+            }
+            _ => {}
+        }
         let wide = |ui: &mut egui::Ui, text: &mut String, hint: &str| {
             ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY)).lost_focus()
         };
@@ -134,14 +114,9 @@ fn fact_editor(ui: &mut egui::Ui, form: &mut FactForm, original: Option<&Fact>) 
     if action.is_some() {
         return action;
     }
-    let input = form.input()?;
-    // a missing descriptor means an exact date, same as "Span"
-    let normalized = |d: &Date| Date {
-        descriptor: if d.descriptor.is_empty() { "Span".into() } else { d.descriptor.clone() },
-        ..d.clone()
-    };
-    let unchanged = original
-        .is_some_and(|f| normalized(&f.date) == input.date && f.place == input.place && f.details == input.details);
+    let input = form.input().ok()?;
+    let unchanged =
+        original.is_some_and(|f| f.date == input.date && f.place == input.place && f.details == input.details);
     (commit && !unchanged).then(|| Action::UpdateFact(form.id.clone(), input))
 }
 

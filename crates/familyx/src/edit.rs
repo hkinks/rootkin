@@ -42,7 +42,9 @@ const FACT_ORDER: &[&str] = &[
     "Multimedia",
     "Notes",
 ];
-const FACT_DATE_ORDER: &[&str] = &["StartDay", "StartMonth", "StartYear", "DateDescriptor", "StartTime"];
+// CustomDate property order (the subset we write); see docs/design.md
+const FACT_DATE_ORDER: &[&str] =
+    &["StartDay", "StartMonth", "StartYear", "EndDay", "EndMonth", "EndYear", "DateDescriptor", "StartTime", "Text"];
 const PLACE_ORDER: &[&str] = &["Description", "Longitude", "Latitude", "BoundingBox"];
 const FAMILY_ORDER: &[&str] = &[
     "AuthorCollection",
@@ -394,14 +396,25 @@ fn ensure_record<'a>(parent: &'a mut Element, name: &str, order: &[&str]) -> &'a
 }
 
 fn write_fact_fields(fact: &mut Element, input: &FactInput) {
-    let descriptor = if input.date.descriptor.is_empty() { "Span" } else { input.date.descriptor.as_str() };
-    ensure_record(fact, "FactDatePeriod", FACT_ORDER).ensure_child("DateDescriptor", &[]).set_text(descriptor);
+    // FactDatePeriod is always "Span" in files the app writes; the actual
+    // qualifier lives in FactDate/DateDescriptor
+    let period = ensure_record(fact, "FactDatePeriod", FACT_ORDER);
+    if period.child("DateDescriptor").is_none() {
+        period.ensure_child("DateDescriptor", &[]).set_text("Span");
+    }
 
+    let d = &input.date;
     let date = ensure_record(fact, "FactDate", FACT_ORDER);
     let num = |v: Option<i64>| v.map(|v| v.to_string()).unwrap_or_default();
-    set_child_text(date, "StartDay", &num(input.date.day.map(i64::from)), FACT_DATE_ORDER);
-    set_child_text(date, "StartMonth", &num(input.date.month.map(i64::from)), FACT_DATE_ORDER);
-    set_child_text(date, "StartYear", &num(input.date.year.map(i64::from)), FACT_DATE_ORDER);
+    set_child_text(date, "StartDay", &num(d.day.map(i64::from)), FACT_DATE_ORDER);
+    set_child_text(date, "StartMonth", &num(d.month.map(i64::from)), FACT_DATE_ORDER);
+    set_child_text(date, "StartYear", &num(d.year.map(i64::from)), FACT_DATE_ORDER);
+    set_child_text(date, "EndDay", &num(d.end_day.map(i64::from)), FACT_DATE_ORDER);
+    set_child_text(date, "EndMonth", &num(d.end_month.map(i64::from)), FACT_DATE_ORDER);
+    set_child_text(date, "EndYear", &num(d.end_year.map(i64::from)), FACT_DATE_ORDER);
+    let descriptor = if d.descriptor == "Exact" { "" } else { d.descriptor.as_str() };
+    set_child_text(date, "DateDescriptor", descriptor, FACT_DATE_ORDER);
+    set_child_text(date, "Text", &d.text, FACT_DATE_ORDER);
     ensure_record(fact, "SortDate", FACT_ORDER);
 
     if input.place.is_empty() {

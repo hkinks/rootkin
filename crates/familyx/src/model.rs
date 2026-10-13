@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+pub use crate::date::Date;
 use crate::doc::{Document, Element};
 
 pub type Id = String;
@@ -47,36 +48,6 @@ impl Name {
             .copied()
             .collect::<Vec<_>>()
             .join(" ")
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Date {
-    pub year: Option<i32>,
-    pub month: Option<u32>,
-    pub day: Option<u32>,
-    /// `FactDatePeriod/DateDescriptor`, e.g. `Span` (exact) or `About`.
-    pub descriptor: String,
-}
-
-impl Date {
-    pub fn is_empty(&self) -> bool {
-        self.year.is_none() && self.month.is_none() && self.day.is_none()
-    }
-
-    pub fn display(&self) -> String {
-        let core = match (self.year, self.month, self.day) {
-            (Some(y), Some(m), Some(d)) => format!("{y:04}-{m:02}-{d:02}"),
-            (Some(y), Some(m), None) => format!("{y:04}-{m:02}"),
-            (Some(y), None, _) => format!("{y}"),
-            (None, Some(m), Some(d)) => format!("??-{m:02}-{d:02}"),
-            _ => String::new(),
-        };
-        if self.descriptor == "About" && !core.is_empty() {
-            format!("abt. {core}")
-        } else {
-            core
-        }
     }
 }
 
@@ -290,6 +261,23 @@ fn text_opt<T: std::str::FromStr>(el: &Element, path: &str) -> Option<T> {
     el.child_text(path).and_then(|t| t.trim().parse().ok())
 }
 
+fn read_date(d: Option<&Element>) -> Date {
+    let Some(d) = d else { return Date::default() };
+    let descriptor = d.child_text("DateDescriptor").unwrap_or_default();
+    Date {
+        // `Exact` is the serialized default; normalize to empty
+        descriptor: if descriptor == "Exact" { String::new() } else { descriptor },
+        year: text_opt(d, "StartYear"),
+        // StartMonth is a non-nullable int in the app; 0 means unknown
+        month: text_opt(d, "StartMonth").filter(|m| *m != 0),
+        day: text_opt(d, "StartDay"),
+        end_year: text_opt(d, "EndYear"),
+        end_month: text_opt(d, "EndMonth").filter(|m| *m != 0),
+        end_day: text_opt(d, "EndDay"),
+        text: d.child_text("Text").unwrap_or_default(),
+    }
+}
+
 fn read_person(p: &Element) -> Person {
     let names = p
         .path("PersonNameCollection/Names")
@@ -331,12 +319,7 @@ fn read_facts(owner: &Element) -> Vec<Fact> {
             id: attr(f, "Id"),
             tag: f.child_text("Tag").unwrap_or_default(),
             is_primary: f.child_text("IsPrimary").as_deref() == Some("true"),
-            date: Date {
-                year: text_opt(f, "FactDate/StartYear"),
-                month: text_opt(f, "FactDate/StartMonth"),
-                day: text_opt(f, "FactDate/StartDay"),
-                descriptor: f.child_text("FactDatePeriod/DateDescriptor").unwrap_or_default(),
-            },
+            date: read_date(f.child("FactDate")),
             place: f.child_text("PlaceDetails/Description").unwrap_or_default(),
             details: f.child_text("Details").unwrap_or_default(),
         })

@@ -17,6 +17,16 @@ that opens, edits and saves `.familyx` files which the Windows app can still ope
 
 ## Data model
 
+- Dates are the app's `CustomDate` in `Fact/FactDate`: `Start*`, `End*`, `DateDescriptor`
+  (`Exact` default/omitted, `About`, `Estimated`, `Calculated`, `Before`, `After`, `Range`,
+  `Span`, `FromOnly`, `ToOnly`, `EitherOr`, `Interpreted`, `TextOnly`) and `Text`.
+  `FactDatePeriod/DateDescriptor` is always `Span` in app-written files and is not the qualifier.
+- Enum values the app accepts (writing anything else may break loading):
+  `ParentChildModifier` Natural|Adopted|Foster|Step|Guardian|Sealing|Custom;
+  `NameType` Adopted|Aka|Birth|FormerSurname|Immigrant|Maiden|Married|Nick|Professional|Religious|Custom;
+  `SpouseRelationshipStatus` Engaged|Current|Separated|DivorceFiled|Deceased|Former|Divorced|Annulled|Dissolved;
+  `Gender` Male|Female|Other|Unknown|NotYetKnown. Fact `Tag` is a free string (GEDCOM tags).
+
 - `ParentChildLink` (Person1 = parent, Person2 = child), one per parent.
 - `SpouseLink` = couple/"family"; each spouse has a `FamilySpouseLink` back-reference.
 - Child has `FamilyChildLink` → parents' `SpouseLink` when both parents are a couple.
