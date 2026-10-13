@@ -20,7 +20,7 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 - [x] Decide commit email (personal vs GitHub noreply) before first push
 - [x] Create the GitHub repo and push
 - [x] Release workflow (`v*` tags → Linux/Windows/macOS archives)
-- [ ] Verify CI and release workflows on GitHub after the first push
+- [x] Verify CI and release workflows on GitHub (release dry run via workflow_dispatch builds Linux/Windows/macOS)
 
 ## Import/export formats
 
