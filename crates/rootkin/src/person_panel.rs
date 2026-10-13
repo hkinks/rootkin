@@ -46,7 +46,10 @@ impl FactForm {
 
     /// Parsed input, or `None` if a date part is invalid.
     fn input(&self) -> Option<FactInput> {
-        fn part<T: std::str::FromStr + PartialOrd>(s: &str, range: std::ops::RangeInclusive<T>) -> Result<Option<T>, ()> {
+        fn part<T: std::str::FromStr + PartialOrd>(
+            s: &str,
+            range: std::ops::RangeInclusive<T>,
+        ) -> Result<Option<T>, ()> {
             let s = s.trim();
             if s.is_empty() {
                 return Ok(None);
@@ -204,7 +207,11 @@ impl App {
                 ui.add_space(6.0);
                 ui.label(RichText::new("Other names").strong());
                 for n in person.names.iter().filter(|n| !n.is_primary) {
-                    ui.weak(if n.name_type.is_empty() { n.display() } else { format!("{} ({})", n.display(), n.name_type) });
+                    ui.weak(if n.name_type.is_empty() {
+                        n.display()
+                    } else {
+                        format!("{} ({})", n.display(), n.name_type)
+                    });
                 }
             }
 
@@ -248,24 +255,48 @@ impl App {
                         if ui.link(format!("{}  {}", p.display_name(), p.lifespan())).clicked() {
                             *action = Some(Action::Goto(id.to_string()));
                         }
-                        if ui.small_button("×").on_hover_text("Remove this relationship (keeps the person)").clicked() {
+                        if ui.small_button("×").on_hover_text("Remove this relationship (keeps the person)").clicked()
+                        {
                             *action = Some(unlink(id.to_string()));
                         }
                     });
                 }
             };
-            relatives(ui, "Parents", self.tree.parents(&person.id), Relation::Parent, Action::UnlinkParent, &mut action);
-            relatives(ui, "Spouses", self.tree.spouses(&person.id), Relation::Spouse, Action::UnlinkSpouse, &mut action);
+            relatives(
+                ui,
+                "Parents",
+                self.tree.parents(&person.id),
+                Relation::Parent,
+                Action::UnlinkParent,
+                &mut action,
+            );
+            relatives(
+                ui,
+                "Spouses",
+                self.tree.spouses(&person.id),
+                Relation::Spouse,
+                Action::UnlinkSpouse,
+                &mut action,
+            );
             for link in self.tree.spouse_links_of(&person.id) {
                 let spouse = self.tree.person(link.other(&person.id)).map(|p| p.display_name()).unwrap_or_default();
                 for f in &link.facts {
                     ui.weak(format!("{} with {spouse}: {} {}", f.label(), f.date.display(), f.place));
                 }
-                if !link.facts.iter().any(|f| f.tag == "MARR") && ui.small_button(format!("+ Marriage with {spouse}")).clicked() {
+                if !link.facts.iter().any(|f| f.tag == "MARR")
+                    && ui.small_button(format!("+ Marriage with {spouse}")).clicked()
+                {
                     action = Some(Action::AddCoupleFact(link.id.clone(), "MARR"));
                 }
             }
-            relatives(ui, "Children", self.tree.children(&person.id), Relation::Child, Action::UnlinkChild, &mut action);
+            relatives(
+                ui,
+                "Children",
+                self.tree.children(&person.id),
+                Relation::Child,
+                Action::UnlinkChild,
+                &mut action,
+            );
         });
         self.form = Some(form);
 

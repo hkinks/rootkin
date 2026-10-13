@@ -114,17 +114,15 @@ impl Package {
                 parts.push((entry.name().to_string(), data));
             }
         }
-        let (family_index, blob) = family.ok_or_else(|| {
-            Error::Format("no family8 part (older .familyx versions are not supported)".into())
-        })?;
+        let (family_index, blob) = family
+            .ok_or_else(|| Error::Format("no family8 part (older .familyx versions are not supported)".into()))?;
         let doc = Document::parse(&codec::decode(&blob)?)?;
         Ok(Package { doc, parts, family_index })
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let family_blob = codec::encode(&self.doc.to_bytes());
         let mut family = Some(family_blob);
         for (i, (name, data)) in self.parts.iter().enumerate() {

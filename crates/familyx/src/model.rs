@@ -211,7 +211,8 @@ impl Tree {
 
         let mut spouse_links = Vec::new();
         let mut parent_links = Vec::new();
-        for link in root.child("RelationshipCollection").into_iter().flat_map(|c| c.children_named("RelationshipLink")) {
+        for link in root.child("RelationshipCollection").into_iter().flat_map(|c| c.children_named("RelationshipLink"))
+        {
             let id = attr(link, "Id");
             let p1 = attr(link, "Person1Id");
             let p2 = attr(link, "Person2Id");
@@ -314,7 +315,10 @@ fn read_person(p: &Element) -> Person {
         is_living: p.child_text("IsLiving").as_deref() == Some("true"),
         facts: read_facts(p),
         primary_image: p.child_text("PrimaryImageId").filter(|s| !s.is_empty()),
-        media: p.child("Multimedia").map(|m| m.children_named("string").map(Element::text).collect()).unwrap_or_default(),
+        media: p
+            .child("Multimedia")
+            .map(|m| m.children_named("string").map(Element::text).collect())
+            .unwrap_or_default(),
     }
 }
 

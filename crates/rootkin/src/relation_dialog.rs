@@ -61,12 +61,8 @@ impl App {
         let mut done = false;
         let mut submit = false;
 
-        let anchor_name = dlg
-            .relation
-            .as_ref()
-            .and_then(|(_, a)| self.tree.person(a))
-            .map(|p| p.display_name())
-            .unwrap_or_default();
+        let anchor_name =
+            dlg.relation.as_ref().and_then(|(_, a)| self.tree.person(a)).map(|p| p.display_name()).unwrap_or_default();
         let title = match &dlg.relation {
             None => "New person".to_string(),
             Some((Relation::Parent, _)) => format!("Add parent of {anchor_name}"),
@@ -134,7 +130,9 @@ impl App {
                 let spouses = self.tree.spouses(anchor);
                 if !spouses.is_empty() {
                     let label = |id: Option<&str>| {
-                        id.and_then(|id| self.tree.person(id)).map(|p| p.display_name()).unwrap_or_else(|| "nobody".into())
+                        id.and_then(|id| self.tree.person(id))
+                            .map(|p| p.display_name())
+                            .unwrap_or_else(|| "nobody".into())
                     };
                     ui.horizontal(|ui| {
                         ui.label("Other parent:");
@@ -151,7 +149,11 @@ impl App {
             }
 
             ui.separator();
-            let ready = if dlg.use_existing { dlg.chosen.is_some() } else { !(dlg.given.trim().is_empty() && dlg.surname.trim().is_empty()) };
+            let ready = if dlg.use_existing {
+                dlg.chosen.is_some()
+            } else {
+                !(dlg.given.trim().is_empty() && dlg.surname.trim().is_empty())
+            };
             ui.horizontal(|ui| {
                 submit |= ui.add_enabled(ready, egui::Button::new("Add")).clicked();
                 submit |= ready && !dlg.use_existing && ui.input(|i| i.key_pressed(egui::Key::Enter));

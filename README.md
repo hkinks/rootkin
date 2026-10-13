@@ -7,6 +7,8 @@ tree can be maintained on Linux and still be opened by the Windows program.
 Not affiliated with or endorsed by Chronoplex Software. The file format was
 reverse-engineered solely for interoperability; see [docs/design.md](docs/design.md).
 
+![Rootkin showing the fictional example tree](docs/screenshot.png)
+
 ## Features
 
 - Read and write `.familyx` (v3 `family8` part) losslessly: anything the editor
@@ -41,7 +43,9 @@ cargo run -p rootkin-cli -- example new.familyx        # fictional sample tree
 - `crates/familyx` — format library (codec, lossless XML, model, edits)
 - `crates/rootkin` — the egui desktop app
 - `crates/rootkin-cli` — command-line tool
-- `docs/` — design notes, TODO, UX review
+- `docs/` — design notes, [TODO](docs/TODO.md), UX review
+
+Status: early but usable. Back up your files; a `.bak` copy is kept on every save.
 
 ## Privacy
 

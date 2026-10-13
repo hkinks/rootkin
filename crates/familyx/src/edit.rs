@@ -12,20 +12,48 @@ use crate::model::{Date, Gender, Id};
 
 // Child element order per type, derived from files the app writes.
 const PERSON_ORDER: &[&str] = &[
-    "PersonNameCollection", "Biology", "FamilyChildLinks", "FamilySpouseLinks", "PrimaryImageId", "Face",
-    "IsLiving", "Facts", "Multimedia", "Notes",
+    "PersonNameCollection",
+    "Biology",
+    "FamilyChildLinks",
+    "FamilySpouseLinks",
+    "PrimaryImageId",
+    "Face",
+    "IsLiving",
+    "Facts",
+    "Multimedia",
+    "Notes",
 ];
 const NAME_ORDER: &[&str] =
     &["Names", "SurnamePrefix", "Surname", "Suffix", "Nickname", "Notes", "IsPrimary", "NameType"];
 const FACT_ORDER: &[&str] = &[
-    "Tag", "CustomFactTag", "Details", "ReligiousAffiliation", "IsPrimary", "FactDatePeriod", "IsFamily",
-    "FactDate", "SortDate", "PlaceDetails", "FullAddress", "AgeAtEvent", "Ages", "Multimedia", "Notes",
+    "Tag",
+    "CustomFactTag",
+    "Details",
+    "ReligiousAffiliation",
+    "IsPrimary",
+    "FactDatePeriod",
+    "IsFamily",
+    "FactDate",
+    "SortDate",
+    "PlaceDetails",
+    "FullAddress",
+    "AgeAtEvent",
+    "Ages",
+    "Multimedia",
+    "Notes",
 ];
 const FACT_DATE_ORDER: &[&str] = &["StartDay", "StartMonth", "StartYear", "DateDescriptor", "StartTime"];
 const PLACE_ORDER: &[&str] = &["Description", "Longitude", "Latitude", "BoundingBox"];
 const FAMILY_ORDER: &[&str] = &[
-    "AuthorCollection", "PeopleCollection", "SourceCollection", "RepositoryCollection",
-    "PackagedFileCollection", "TaskCollection", "RelationshipCollection", "TagCollection", "FileProperties",
+    "AuthorCollection",
+    "PeopleCollection",
+    "SourceCollection",
+    "RepositoryCollection",
+    "PackagedFileCollection",
+    "TaskCollection",
+    "RelationshipCollection",
+    "TagCollection",
+    "FileProperties",
     "FamilyProperties",
 ];
 
@@ -179,7 +207,8 @@ pub fn set_name(doc: &mut Document, person_id: &str, given: &str, surname: &str)
             let mut n = record("Name");
             n.push(text_el("IsPrimary", "true"));
             // keep the app's trailing empty <Name/> placeholder last
-            let at = names.children.len().saturating_sub(usize::from(names.elements().last().is_some_and(|n| !is_real(n))));
+            let at =
+                names.children.len().saturating_sub(usize::from(names.elements().last().is_some_and(|n| !is_real(n))));
             names.children.insert(at, crate::doc::Node::Element(n));
             match &mut names.children[at] {
                 crate::doc::Node::Element(e) => e,
@@ -194,7 +223,13 @@ pub fn set_name(doc: &mut Document, person_id: &str, given: &str, surname: &str)
 }
 
 /// Add a non-primary name, e.g. a birth or married name (`name_type` like `Married`).
-pub fn add_alternate_name(doc: &mut Document, person_id: &str, given: &str, surname: &str, name_type: &str) -> EditResult<Id> {
+pub fn add_alternate_name(
+    doc: &mut Document,
+    person_id: &str,
+    given: &str,
+    surname: &str,
+    name_type: &str,
+) -> EditResult<Id> {
     let person = person_mut(doc, person_id)?;
     let mut name = record("Name");
     let id = name.attr("Id").unwrap_or_default().into_owned();
@@ -241,7 +276,9 @@ pub fn delete_person(doc: &mut Document, person_id: &str) -> EditResult<()> {
         return Err(EditError::NoPerson(person_id.to_string()));
     }
     let links: Vec<(Id, String)> = relationship_links(doc)
-        .filter(|l| l.attr("Person1Id").as_deref() == Some(person_id) || l.attr("Person2Id").as_deref() == Some(person_id))
+        .filter(|l| {
+            l.attr("Person1Id").as_deref() == Some(person_id) || l.attr("Person2Id").as_deref() == Some(person_id)
+        })
         .map(|l| (l.attr("Id").unwrap_or_default().into_owned(), l.attr("xsi:type").unwrap_or_default().into_owned()))
         .collect();
     for (link_id, kind) in links {
@@ -398,14 +435,18 @@ fn link_kind_between(doc: &Document, kind: &str, a: &str, b: &str, ordered: bool
 
 fn parents_of(doc: &Document, child: &str) -> Vec<Id> {
     relationship_links(doc)
-        .filter(|l| l.attr("xsi:type").as_deref() == Some("ParentChildLink") && l.attr("Person2Id").as_deref() == Some(child))
+        .filter(|l| {
+            l.attr("xsi:type").as_deref() == Some("ParentChildLink") && l.attr("Person2Id").as_deref() == Some(child)
+        })
         .filter_map(|l| l.attr("Person1Id").map(|s| s.into_owned()))
         .collect()
 }
 
 fn children_of(doc: &Document, parent: &str) -> Vec<Id> {
     relationship_links(doc)
-        .filter(|l| l.attr("xsi:type").as_deref() == Some("ParentChildLink") && l.attr("Person1Id").as_deref() == Some(parent))
+        .filter(|l| {
+            l.attr("xsi:type").as_deref() == Some("ParentChildLink") && l.attr("Person1Id").as_deref() == Some(parent)
+        })
         .filter_map(|l| l.attr("Person2Id").map(|s| s.into_owned()))
         .collect()
 }

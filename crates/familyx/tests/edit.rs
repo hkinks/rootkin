@@ -121,12 +121,19 @@ fn marriage_fact_on_new_couple() {
     let a = edit::add_person(&mut pkg.doc, "A", "X", Gender::Male);
     let b = edit::add_person(&mut pkg.doc, "B", "Y", Gender::Female);
     let couple = edit::link_spouse(&mut pkg.doc, &a, &b).unwrap();
-    let input = FactInput { date: Date { year: Some(2001), ..Default::default() }, place: "Pärnu".into(), ..Default::default() };
+    let input = FactInput {
+        date: Date { year: Some(2001), ..Default::default() },
+        place: "Pärnu".into(),
+        ..Default::default()
+    };
     let fact = edit::add_couple_fact(&mut pkg.doc, &couple, "MARR", &input).unwrap();
     let tree = Tree::from_doc(&pkg.doc);
     let link = tree.spouse_links.iter().find(|l| l.id == couple).unwrap();
     assert_eq!(link.facts.len(), 1);
-    assert_eq!((link.facts[0].id.as_str(), link.facts[0].date.year, link.facts[0].place.as_str()), (fact.as_str(), Some(2001), "Pärnu"));
+    assert_eq!(
+        (link.facts[0].id.as_str(), link.facts[0].date.year, link.facts[0].place.as_str()),
+        (fact.as_str(), Some(2001), "Pärnu")
+    );
     edit::delete_fact(&mut pkg.doc, &fact).unwrap();
     assert!(Tree::from_doc(&pkg.doc).spouse_links.iter().find(|l| l.id == couple).unwrap().facts.is_empty());
 }

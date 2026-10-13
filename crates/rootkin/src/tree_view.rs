@@ -138,7 +138,11 @@ impl TreeView {
             self.auto_fit = true;
         }
         let fit_button = Rect::from_min_size(canvas.right_top() + Vec2::new(-52.0, 8.0), Vec2::new(44.0, 22.0));
-        if ui.put(fit_button, egui::Button::new("Fit")).on_hover_text("Fit tree to view (or double-click background)").clicked() {
+        if ui
+            .put(fit_button, egui::Button::new("Fit"))
+            .on_hover_text("Fit tree to view (or double-click background)")
+            .clicked()
+        {
             self.auto_fit = true;
         }
 
@@ -196,10 +200,7 @@ fn layout(tree: &Tree, focus: &str) -> Layout {
                 let x = cx + if k == 0 { -offset } else { offset };
                 if let Some(p) = &parent {
                     l.boxes.push((p.clone(), Pos2::new(x, y)));
-                    l.edges.push((
-                        Pos2::new(x, y + BOX.y / 2.0),
-                        Pos2::new(*cx, y + row - BOX.y / 2.0),
-                    ));
+                    l.edges.push((Pos2::new(x, y + BOX.y / 2.0), Pos2::new(*cx, y + row - BOX.y / 2.0)));
                 }
                 next.push((parent, x));
             }

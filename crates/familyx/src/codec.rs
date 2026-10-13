@@ -17,8 +17,8 @@ type HmacSha512 = Hmac<Sha512>;
 
 const PASSWORD: &str = "1@42%e23/;.j)Y3#{#.s5INU2V#:_Dx)w-R~_7812c448,,T%92L}Yt?{B*(=$1";
 const TAG_V3: [u8; 32] = [
-    0x7C, 0x42, 0x9A, 0x26, 0x62, 0x18, 0x14, 0x53, 0x38, 0x6A, 0x06, 0x7D, 0x5B, 0xB8, 0xC0, 0x2A,
-    0x52, 0x92, 0xCB, 0xDB, 0x15, 0xEE, 0x91, 0x58, 0x92, 0xCE, 0x38, 0xBE, 0xFF, 0x2D, 0xF5, 0x66,
+    0x7C, 0x42, 0x9A, 0x26, 0x62, 0x18, 0x14, 0x53, 0x38, 0x6A, 0x06, 0x7D, 0x5B, 0xB8, 0xC0, 0x2A, 0x52, 0x92, 0xCB,
+    0xDB, 0x15, 0xEE, 0x91, 0x58, 0x92, 0xCE, 0x38, 0xBE, 0xFF, 0x2D, 0xF5, 0x66,
 ];
 const ITERATIONS: u32 = 210_000;
 const HEADER_LEN: usize = 64 + 32 + 32 + 16;
@@ -83,8 +83,8 @@ fn encode_with(xml: &[u8], salt: &[u8; 32], iv: &[u8; 16]) -> Vec<u8> {
     let mut deflater = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::new(6));
     deflater.write_all(xml).expect("writing to a Vec cannot fail");
     let compressed = deflater.finish().expect("writing to a Vec cannot fail");
-    let ciphertext = cbc::Encryptor::<aes::Aes256>::new(&keys.enc.into(), iv.into())
-        .encrypt_padded_vec_mut::<Pkcs7>(&compressed);
+    let ciphertext =
+        cbc::Encryptor::<aes::Aes256>::new(&keys.enc.into(), iv.into()).encrypt_padded_vec_mut::<Pkcs7>(&compressed);
 
     let mut body = Vec::with_capacity(HEADER_LEN + ciphertext.len());
     body.extend_from_slice(&TAG_V3);

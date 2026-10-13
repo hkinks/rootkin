@@ -224,9 +224,9 @@ impl Element {
                 let rank = |n: &str| order.iter().position(|o| *o == n);
                 let insert_at = rank(name)
                     .and_then(|r| {
-                        self.children.iter().position(
-                            |n| matches!(n, Node::Element(e) if rank(&e.name).is_some_and(|er| er > r)),
-                        )
+                        self.children
+                            .iter()
+                            .position(|n| matches!(n, Node::Element(e) if rank(&e.name).is_some_and(|er| er > r)))
                     })
                     .unwrap_or(self.children.len());
                 self.children.insert(insert_at, Node::Element(Element::new(name)));
@@ -341,7 +341,8 @@ mod tests {
 
     #[test]
     fn roundtrip_is_byte_exact() {
-        let xml = "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?><A x=\"1&#x0;2\"><B /><C>t &amp; u</C><!-- c --></A>";
+        let xml =
+            "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?><A x=\"1&#x0;2\"><B /><C>t &amp; u</C><!-- c --></A>";
         let doc = Document::parse(xml.as_bytes()).unwrap();
         assert_eq!(String::from_utf8(doc.to_bytes()).unwrap(), xml);
         assert_eq!(doc.root.attr("x").unwrap(), "1\u{0}2");

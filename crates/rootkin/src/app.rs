@@ -196,7 +196,11 @@ impl App {
                 self.pick_open();
             }
             let has_file = self.pkg.is_some();
-            if ui.add_enabled(has_file && self.path.is_some(), egui::Button::new("Save")).on_hover_text("Ctrl+S").clicked() {
+            if ui
+                .add_enabled(has_file && self.path.is_some(), egui::Button::new("Save"))
+                .on_hover_text("Ctrl+S")
+                .clicked()
+            {
                 if let Some(path) = self.path.clone() {
                     self.save(path);
                 }
@@ -208,7 +212,11 @@ impl App {
             if ui.add_enabled(!self.undo.is_empty(), egui::Button::new("⟲ Undo")).on_hover_text("Ctrl+Z").clicked() {
                 self.undo(false);
             }
-            if ui.add_enabled(!self.redo.is_empty(), egui::Button::new("⟳ Redo")).on_hover_text("Ctrl+Shift+Z").clicked() {
+            if ui
+                .add_enabled(!self.redo.is_empty(), egui::Button::new("⟳ Redo"))
+                .on_hover_text("Ctrl+Shift+Z")
+                .clicked()
+            {
                 self.undo(true);
             }
             ui.separator();

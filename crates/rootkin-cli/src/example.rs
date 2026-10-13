@@ -72,43 +72,65 @@ pub fn build() -> Result<Package> {
     let mut b = Builder { doc: &mut pkg.doc };
 
     // generation 1
-    let arthur = b.person("Arthur", "Lindqvist", Male, &[
-        ("BIRT", ymd(1890, 3, 14), "Uppsala, Sweden", ""),
-        ("DEAT", ymd(1961, 11, 2), "Tallinn, Estonia", ""),
-        ("OCCU", year(1920), "", "Clockmaker"),
-    ])?;
-    let elsa = b.person("Elsa", "Berg", Female, &[
-        ("BIRT", ymd(1893, 7, 1), "Stockholm, Sweden", ""),
-        ("DEAT", year(1975), "Tallinn, Estonia", ""),
-    ])?;
-    let johan = b.person("Johan", "Mets", Male, &[
-        ("BIRT", about(1888), "Tartu, Estonia", ""),
-        ("DEAT", ymd(1944, 9, 20), "", ""),
-        ("OCCU", Date::default(), "", "Farmer & beekeeper"),
-    ])?;
-    let marta = b.person("Marta", "Kask", Female, &[
-        ("BIRT", ymd(1895, 1, 30), "Võru, Estonia", ""),
-        ("DEAT", ymd(1980, 5, 5), "Tartu, Estonia", ""),
-        ("BURI", ymd(1980, 5, 12), "Raadi cemetery, Tartu", ""),
-    ])?;
+    let arthur = b.person(
+        "Arthur",
+        "Lindqvist",
+        Male,
+        &[
+            ("BIRT", ymd(1890, 3, 14), "Uppsala, Sweden", ""),
+            ("DEAT", ymd(1961, 11, 2), "Tallinn, Estonia", ""),
+            ("OCCU", year(1920), "", "Clockmaker"),
+        ],
+    )?;
+    let elsa = b.person(
+        "Elsa",
+        "Berg",
+        Female,
+        &[("BIRT", ymd(1893, 7, 1), "Stockholm, Sweden", ""), ("DEAT", year(1975), "Tallinn, Estonia", "")],
+    )?;
+    let johan = b.person(
+        "Johan",
+        "Mets",
+        Male,
+        &[
+            ("BIRT", about(1888), "Tartu, Estonia", ""),
+            ("DEAT", ymd(1944, 9, 20), "", ""),
+            ("OCCU", Date::default(), "", "Farmer & beekeeper"),
+        ],
+    )?;
+    let marta = b.person(
+        "Marta",
+        "Kask",
+        Female,
+        &[
+            ("BIRT", ymd(1895, 1, 30), "Võru, Estonia", ""),
+            ("DEAT", ymd(1980, 5, 5), "Tartu, Estonia", ""),
+            ("BURI", ymd(1980, 5, 12), "Raadi cemetery, Tartu", ""),
+        ],
+    )?;
     b.couple(&arthur, &elsa, Some((ymd(1915, 6, 21), "Uppsala Cathedral")))?;
     b.couple(&johan, &marta, Some((year(1919), "Tartu")))?;
 
     // generation 2
-    let karl = b.person("Karl", "Lindqvist", Male, &[
-        ("BIRT", ymd(1920, 2, 2), "Tallinn, Estonia", ""),
-        ("DEAT", ymd(1999, 12, 24), "Tallinn, Estonia", ""),
-        ("OCCU", Date::default(), "", "Engineer at the \"Volta\" factory"),
-    ])?;
+    let karl = b.person(
+        "Karl",
+        "Lindqvist",
+        Male,
+        &[
+            ("BIRT", ymd(1920, 2, 2), "Tallinn, Estonia", ""),
+            ("DEAT", ymd(1999, 12, 24), "Tallinn, Estonia", ""),
+            ("OCCU", Date::default(), "", "Engineer at the \"Volta\" factory"),
+        ],
+    )?;
     let ingrid = b.person("Ingrid", "Lindqvist", Female, &[("BIRT", about(1923), "Tallinn, Estonia", "")])?;
-    let peeter = b.person("Peeter", "Mets", Male, &[
-        ("BIRT", year(1921), "Tartu, Estonia", ""),
-        ("DEAT", year(1941), "", ""),
-    ])?;
-    let liis = b.person("Liis", "Mets", Female, &[
-        ("BIRT", ymd(1924, 8, 9), "Tartu, Estonia", ""),
-        ("DEAT", ymd(2015, 3, 3), "Tallinn, Estonia", ""),
-    ])?;
+    let peeter =
+        b.person("Peeter", "Mets", Male, &[("BIRT", year(1921), "Tartu, Estonia", ""), ("DEAT", year(1941), "", "")])?;
+    let liis = b.person(
+        "Liis",
+        "Mets",
+        Female,
+        &[("BIRT", ymd(1924, 8, 9), "Tartu, Estonia", ""), ("DEAT", ymd(2015, 3, 3), "Tallinn, Estonia", "")],
+    )?;
     edit::add_alternate_name(b.doc, &liis, "Liis", "Lindqvist", "Married")?;
     b.child(&karl, &[&arthur, &elsa])?;
     b.child(&ingrid, &[&arthur, &elsa])?;
@@ -117,10 +139,12 @@ pub fn build() -> Result<Package> {
     b.couple(&karl, &liis, Some((ymd(1948, 9, 18), "Tallinn <Old Town>")))?;
 
     // generation 3
-    let erik = b.person("Erik", "Lindqvist", Male, &[
-        ("BIRT", ymd(1950, 4, 1), "Tallinn, Estonia", ""),
-        ("RESI", year(1985), "Pärnu, Estonia", ""),
-    ])?;
+    let erik = b.person(
+        "Erik",
+        "Lindqvist",
+        Male,
+        &[("BIRT", ymd(1950, 4, 1), "Tallinn, Estonia", ""), ("RESI", year(1985), "Pärnu, Estonia", "")],
+    )?;
     let anna = b.person("Anna", "Lindqvist", Female, &[("BIRT", ymd(1953, 10, 10), "Tallinn, Estonia", "")])?;
     let olaf = b.person("Olaf", "Berg-Lindqvist", Male, &[("BIRT", year(1950), "Helsinki, Finland", "")])?;
     let sofia = b.person("Sofia", "Rahe", Female, &[("BIRT", ymd(1955, 12, 31), "Pärnu, Estonia", "")])?;
@@ -133,10 +157,12 @@ pub fn build() -> Result<Package> {
 
     // generation 4
     let leo = b.person("Leo", "Lindqvist", Male, &[("BIRT", ymd(1979, 5, 20), "Pärnu, Estonia", "")])?;
-    let nora = b.person("Nora", "Lindqvist", Female, &[
-        ("BIRT", year(1983), "Riga, Latvia", ""),
-        ("ADOP", year(1985), "Pärnu, Estonia", ""),
-    ])?;
+    let nora = b.person(
+        "Nora",
+        "Lindqvist",
+        Female,
+        &[("BIRT", year(1983), "Riga, Latvia", ""), ("ADOP", year(1985), "Pärnu, Estonia", "")],
+    )?;
     let mia = b.person("Mia", "O'Brien", Female, &[("BIRT", ymd(1980, 1, 15), "Dublin, Ireland", "")])?;
     b.child(&leo, &[&erik, &sofia])?;
     b.child(&nora, &[&erik, &sofia])?;

@@ -6,6 +6,12 @@ members = ["crates/familyx", "crates/rootkin-cli", "crates/rootkin"]
 edition = "2021"
 version = "0.1.0"
 license = "Unlicense OR MIT"
+repository = "https://github.com/hkinks/rootkin"
+homepage = "https://github.com/hkinks/rootkin"
+authors = ["Hannes Kinks"]
+rust-version = "1.95"
+keywords = ["genealogy", "family-tree", "familyx", "gedcom", "egui"]
+categories = ["gui", "parser-implementations"]
 
 # PBKDF2 with 210k iterations is painfully slow unoptimized
 [profile.dev.package."*"]

@@ -2,6 +2,44 @@
 
 See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities.
 
+## Next steps
+
+1. Publish on GitHub (see "Publishing" below)
+2. GEDCOM + Gramps import/export (design below, awaiting go-ahead)
+3. UX review top 5: reliable commit/save state, welcome screen, labelled relationship
+   buttons, simpler tree interaction, free-text dates
+4. Verify Linux-saved files open in the Windows app
+
+## Publishing
+
+- [x] License: Unlicense OR MIT, all dependencies permissive
+- [x] No personal data in git history; fictional test fixture
+- [x] README with interoperability / non-affiliation notice
+- [x] Cargo metadata (repository, keywords, categories, rust-version)
+- [x] `cargo fmt` + rustfmt config
+- [x] GitHub Actions CI (fmt, clippy, test)
+- [x] Screenshot of the example tree in the README
+- [ ] Decide commit email (personal vs GitHub noreply) before first push
+- [ ] Create the GitHub repo and push
+- [x] Release workflow (`v*` tags → Linux/Windows/macOS archives)
+- [ ] Verify CI and release workflows on GitHub after the first push
+
+## Import/export formats
+
+Planned crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-specific.
+
+- [ ] GEDCOM 5.5.1 export: INDI (NAME `Given /Surname/`, SEX, events with DATE/PLAC),
+      FAM per couple (HUSB/WIFE/MARR/CHIL), single-parent FAM, `PEDI adopted`
+- [ ] GEDCOM import into a new `.familyx` via the edit API; inexpressible dates
+      (BEF/AFT/BET…) kept as text in details; import report of dropped data
+- [ ] Gramps XML (`.gramps`, gzip) export: people, events, places, families with handles
+- [ ] Gramps XML import
+- [ ] CLI: `rootkin-cli export tree.familyx out.ged|out.gramps`, `rootkin-cli import in.ged|in.gramps out.familyx`
+- [ ] Editor: File → Import… (opens as new unsaved tree), File → Export…
+- [ ] Tests: example tree → GEDCOM → familyx and → Gramps → familyx preserve people/links/facts;
+      a hand-written GEDCOM with unsupported tags
+- [ ] Later: photos in export (OBJE / Gramps objects), sources/citations, GEDCOM 7
+
 ## Verify
 - [ ] Open a re-encrypted, unmodified file in the Windows app
 - [ ] Open the generated example (`rootkin-cli example`) in the Windows app (new-file skeleton, random `FamilyId`)
@@ -32,7 +70,6 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 ## Data / format
 - [ ] Sources, repositories, citations (currently preserved but not shown)
 - [ ] Older formats (`family7`, `family5`, `family4`, `family`) — read-only import
-- [ ] GEDCOM import/export
 - [ ] "New family tree" in the UI (library: `Package::new` done)
 - [ ] Understand `FamilyId` attribute (looks like a password-hash record: `SHA512\0210000\0salt\0hash`) — password-protected trees?
 - [ ] Update `FileProperties/LastSavedDate` and `FamilyProperties/LastSavedPersonId` on save
