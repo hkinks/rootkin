@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # manual runs build the archives as workflow artifacts without releasing
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -34,10 +36,16 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          name=rootkin-${GITHUB_REF_NAME}-${{ matrix.target }}
+          name=rootkin-${GITHUB_REF_NAME//\//-}-${{ matrix.target }}
           mkdir "$name"
           cp target/${{ matrix.target }}/release/rootkin${{ matrix.ext }} target/${{ matrix.target }}/release/rootkin-cli${{ matrix.ext }} README.md UNLICENSE LICENSE-MIT "$name"/
           if [ "${{ runner.os }}" = "Windows" ]; then 7z a "$name.zip" "$name"; else tar czf "$name.tar.gz" "$name"; fi
       - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: rootkin-*.*
+      - uses: actions/upload-artifact@v4
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        with:
+          name: rootkin-${{ matrix.target }}
+          path: rootkin-*.*

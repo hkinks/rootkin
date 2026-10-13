@@ -4,11 +4,9 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 
 ## Next steps
 
-1. Publish on GitHub (see "Publishing" below)
-2. Import/export: support as many genealogy formats as possible, starting with GEDCOM and Gramps
-3. UX review top 5: reliable commit/save state, welcome screen, labelled relationship
-   buttons, simpler tree interaction, free-text dates
-4. Verify Linux-saved files open in the Windows app
+1. Verify in the Windows app that Linux-saved files open (see "Verify")
+2. Launch: Flathub/AUR packaging, announcements (plan kept locally, not in git)
+3. Older-format schema migration and source editing, once real sample files are available
 
 ## Publishing
 
@@ -19,8 +17,8 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 - [x] `cargo fmt` + rustfmt config
 - [x] GitHub Actions CI (fmt, clippy, test)
 - [x] Screenshot of the example tree in the README
-- [ ] Decide commit email (personal vs GitHub noreply) before first push
-- [ ] Create the GitHub repo and push
+- [x] Decide commit email (personal vs GitHub noreply) before first push
+- [x] Create the GitHub repo and push
 - [x] Release workflow (`v*` tags → Linux/Windows/macOS archives)
 - [ ] Verify CI and release workflows on GitHub after the first push
 
@@ -48,41 +46,42 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
 - [ ] Open a file edited + saved by the Linux editor in the Windows app
 
 ## Editing
-- [ ] Notes: view/edit person notes and fact notes (`Notes/Notes/Note`, text/html/rtf formats)
-- [ ] Edit couple facts other than marriage (residence, divorce, …) and couple status (`SpouseRelationshipStatus`)
-- [ ] Alternative names in the UI (library: `add_alternate_name` done)
-- [ ] Parent-child modifier in the UI (library: `set_parent_modifier` done)
-- [ ] Set home person in the UI (library: `set_home_person` done)
-- [ ] Custom fact tags (`CustomFactTag`)
-- [ ] Reorder children / spouses
+- [x] Notes: view/edit person notes and fact notes (`Notes/Notes/Note`, text/html/rtf formats)
+- [x] Edit couple facts other than marriage (residence, divorce, …) and couple status (`SpouseRelationshipStatus`)
+- [x] Alternative names in the UI (library: `add_alternate_name` done)
+- [x] Parent-child modifier in the UI (library: `set_parent_modifier` done)
+- [x] Set home person in the UI (library: `set_home_person` done)
+- [x] Custom fact tags (`CustomFactTag`)
+- [x] Reorder children / spouses
 
 ## Media
-- [ ] Gallery of all photos per person
-- [ ] Add photo in the UI (library: `Package::add_photo` done, png/jpg)
-- [ ] Set primary photo, remove photo
-- [ ] Face crop (`Face` element) for thumbnails in tree boxes
+- [x] Gallery of all photos per person
+- [x] Add photo in the UI (library: `Package::add_photo` done, png/jpg)
+- [x] Set primary photo, remove photo
+- [x] Face crop (`Face` element) for thumbnails in tree boxes
 
 ## Tree view
-- [ ] Compact ancestor layout (don't reserve 2^n slots for missing ancestors)
-- [ ] Show more than two parents (adoptive) and half-siblings
-- [ ] Photo thumbnails in boxes
-- [ ] Configurable generations up/down
-- [ ] Keyboard navigation (arrows to parent/child/spouse)
+- [x] Compact ancestor layout (don't reserve 2^n slots for missing ancestors)
+- [x] Show more than two parents (adoptive) and half-siblings
+- [x] Photo thumbnails in boxes
+- [x] Configurable generations up/down
+- [x] Keyboard navigation (arrows to parent/child/spouse)
 
 ## Data / format
-- [ ] Sources, repositories, citations (currently preserved but not shown)
+- [x] Sources and repositories shown read-only (View → Sources); preserved on save
+- [ ] Edit sources/citations (needs real sample data for the schema)
 - [~] Older formats (`family7`, `family5`, `family4`, `family`, plain `content.xml`, family8/7 V1/V2): container
       decryption done and verified against the app's own decrypt code (`Package::source_format()`, saved as family8 V3);
       **schema migration is open** (old per-person `Relationships`, `Photos`, `Story`, ... are kept but not shown;
       `Package::has_legacy_schema()`); needs real old files — see docs/design.md
-- [ ] "New family tree" in the UI (library: `Package::new` done)
+- [x] "New family tree" in the UI (library: `Package::new` done)
 - [x] Understand `FamilyId` attribute: password hash record, UI lock only; new files now get the default-password hash (docs/design.md)
-- [ ] Update `FileProperties/LastSavedDate` and `FamilyProperties/LastSavedPersonId` on save
+- [x] Update `FileProperties/LastSavedDate` and `FamilyProperties/LastSavedPersonId` on save
 
 ## UX
-- [ ] Load/save on a background thread (PBKDF2 210k iterations blocks the UI briefly)
-- [ ] Recent files
-- [ ] Sort/filter options in the people list (by birth year, living only)
-- [ ] Date validation (day vs month length), partial dates
-- [ ] Reports / printing / export tree to PNG/SVG
-- [ ] Packaging: nix flake / desktop file / icon
+- [x] Load/save on a background thread (PBKDF2 210k iterations blocks the UI briefly)
+- [x] Recent files
+- [x] Sort/filter options in the people list (by birth year, living only)
+- [x] Date validation (day vs month length), partial dates
+- [x] Reports / printing / export tree to PNG/SVG
+- [x] Packaging: nix flake / desktop file / icon
