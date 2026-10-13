@@ -20,7 +20,15 @@ Rootkin is an independent project and is not affiliated with Chronoplex Software
 - People list with search, zoomable ancestor/descendant tree, photos
 - Edit names, gender, living status, events (birth, death, marriage, …)
 - Add and link parents, spouses and children; delete people; undo/redo
+- Import and export GEDCOM and Gramps; read older `.familyx` versions
+- Photos (any common image type), notes, alternate names, custom events
+- Export the tree as SVG/PNG and print family reports
 - Atomic saves with a `.bak` copy of the previous version
+
+## Install
+
+- **Nix:** `nix run github:hkinks/rootkin` (or add the flake's `packages.default`)
+- **Binaries:** see [Releases](https://github.com/hkinks/rootkin/releases)
 
 ## Build and run
 
