@@ -130,9 +130,9 @@ impl Pages {
                 .ok_or_else(|| bad("the database is password protected and none of the known passwords fits"))?;
             let mut key_iv = [0u8; 48];
             pbkdf2::pbkdf2_hmac::<Sha1>(password.as_bytes(), salt, 1000, &mut key_iv);
-            for page in data.chunks_exact_mut(PAGE_SIZE).skip(1) {
+            for page in data.as_chunks_mut::<PAGE_SIZE>().0.iter_mut().skip(1) {
                 cbc::Decryptor::<aes::Aes256>::new(key_iv[..32].into(), key_iv[32..].into())
-                    .decrypt_padded_mut::<NoPadding>(page)
+                    .decrypt_padded_mut::<NoPadding>(page.as_mut_slice())
                     .map_err(|_| bad("page decryption failed"))?;
             }
         }
