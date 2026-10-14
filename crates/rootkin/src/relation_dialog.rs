@@ -26,6 +26,12 @@ pub struct RelationDialog {
     gender: Gender,
     /// For a new child: the anchor's spouse who is the other parent.
     co_parent: Option<Id>,
+    /// Put the cursor in "Given names" on the first frame.
+    focus_given: bool,
+    /// For a new parent of someone with one parent: make the two a couple.
+    couple: bool,
+    /// The existing parent to couple with, if the checkbox applies and is on.
+    couple_with: Option<Id>,
 }
 
 impl RelationDialog {
@@ -39,6 +45,9 @@ impl RelationDialog {
             surname: String::new(),
             gender: Gender::Unknown,
             co_parent: None,
+            focus_given: true,
+            couple: true,
+            couple_with: None,
         }
     }
 
@@ -116,8 +125,17 @@ impl App {
                 egui::Grid::new("new_person").num_columns(2).show(ui, |ui| {
                     ui.label("Given names");
                     let r = ui.add(egui::TextEdit::singleline(&mut dlg.given).desired_width(240.0));
-                    if !r.has_focus() && dlg.given.is_empty() && dlg.surname.is_empty() {
+                    // Enter ends editing; keep the cursor here when it doesn't add anybody
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         r.request_focus();
+                    }
+                    // keep asking until it sticks: the first frames of a modal can't take focus yet
+                    if dlg.focus_given {
+                        if r.has_focus() {
+                            dlg.focus_given = false;
+                        } else {
+                            r.request_focus();
+                        }
                     }
                     ui.end_row();
                     ui.label("Surname");
@@ -155,6 +173,22 @@ impl App {
                 }
             }
 
+            dlg.couple_with = None;
+            if let Some((Relation::Parent, anchor)) = &dlg.relation {
+                if let [parent] = self.tree.parents(anchor)[..] {
+                    let name_of = |id: &str| self.tree.person(id).map(|p| p.display_name()).unwrap_or_default();
+                    let new_name = match dlg.chosen.as_deref().filter(|_| dlg.use_existing) {
+                        Some(id) => name_of(id),
+                        None if dlg.use_existing => String::new(),
+                        None => format!("{} {}", dlg.given.trim(), dlg.surname.trim()).trim().to_string(),
+                    };
+                    let new_name = if new_name.is_empty() { "The new parent".to_string() } else { new_name };
+                    ui.checkbox(&mut dlg.couple, format!("{new_name} and {} are a couple", name_of(parent)));
+                    let is_same = dlg.use_existing && dlg.chosen.as_deref() == Some(parent);
+                    dlg.couple_with = (dlg.couple && !is_same).then(|| parent.to_string());
+                }
+            }
+
             ui.separator();
             let ready = if dlg.use_existing {
                 dlg.chosen.is_some()
@@ -163,7 +197,11 @@ impl App {
             };
             ui.horizontal(|ui| {
                 submit |= ui.add_enabled(ready, egui::Button::new("Add")).clicked();
-                submit |= ready && !dlg.use_existing && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // Enter needs a given name: the surname alone may just be prefilled
+                submit |= ready
+                    && !dlg.use_existing
+                    && !dlg.given.trim().is_empty()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 done |= ui.button("Cancel").clicked();
             });
         });
@@ -195,7 +233,12 @@ fn commit(doc: &mut Document, dlg: &RelationDialog) -> EditResult<Id> {
     };
     match &dlg.relation {
         None => {}
-        Some((Relation::Parent, anchor)) => edit::link_parent(doc, anchor, &other)?,
+        Some((Relation::Parent, anchor)) => {
+            edit::link_parent(doc, anchor, &other)?;
+            if let Some(partner) = &dlg.couple_with {
+                edit::link_spouse(doc, partner, &other)?;
+            }
+        }
         Some((Relation::Spouse, anchor)) => {
             edit::link_spouse(doc, anchor, &other)?;
         }

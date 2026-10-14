@@ -273,7 +273,7 @@ fn citations_ui(
     for c in forms {
         ui.horizontal(|ui| {
             ui.label(format!("📖 {}", c.source_title));
-            if ui.small_button("✕").on_hover_text("Remove this citation (the source stays)").clicked() {
+            if ui.small_button("✖").on_hover_text("Remove this citation (the source stays)").clicked() {
                 *action = Some(Action::Uncite(c.id.clone()));
             }
             lost |= ui
@@ -286,7 +286,7 @@ fn citations_ui(
         });
     }
     if tree.sources.is_empty() {
-        ui.weak("No sources yet: add some under View → Sources…");
+        ui.weak("No sources yet: add some under View > Sources…");
     } else {
         egui::ComboBox::from_id_salt(("cite_source", owner)).selected_text("+ Cite source").show_ui(ui, |ui| {
             for s in &tree.sources {

@@ -142,3 +142,150 @@ fn citing_a_source_from_an_event() {
     assert_eq!(h.state().tree.citation_count(&id), before + 1);
     h.get_by_label_contains("Unsaved changes");
 }
+
+const SMALL_GED: &str = "0 HEAD\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Ada /Test/\n0 TRLR\n";
+
+fn temp_ged(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("rootkin-test-{}-{name}.ged", std::process::id()));
+    std::fs::write(&path, SMALL_GED).unwrap();
+    path
+}
+
+/// Step the app until background jobs (open, save, import) are done.
+fn wait_for_jobs(h: &mut Harness<App>) {
+    for _ in 0..500 {
+        h.run_steps(2);
+        if !h.state().is_busy() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("background job did not finish");
+}
+
+#[test]
+fn import_asks_before_replacing_unsaved_changes() {
+    let path = temp_ged("guard");
+    let mut h = harness();
+    h.get_all_by_label("Leo Lindqvist  b. 1979").next().unwrap().click();
+    h.run_steps(3);
+    h.get_by_label("Make home person").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Unsaved changes");
+
+    h.state_mut().request_import(path.clone());
+    h.run_steps(3);
+    h.get_by_label("Save your changes?");
+    assert!(h.state().tree.people.len() > 1, "tree must not be replaced yet");
+
+    // Cancel keeps the current tree
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().tree.people.len() > 1);
+
+    // Don't save goes on with the import
+    h.state_mut().request_import(path.clone());
+    h.run_steps(3);
+    h.get_by_label("Don't save").click();
+    wait_for_jobs(&mut h);
+    assert_eq!(h.state().tree.people.len(), 1);
+    h.run_steps(2);
+    h.get_by_label_contains("1 person and 0 families came in");
+    h.get_by_label("Look around first").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Look around first").is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+/// Open "Add child" for the selected person (surname prefilled).
+fn open_add_child(h: &mut Harness<App>) {
+    let app = h.state_mut();
+    let anchor = app.selected.clone().unwrap();
+    app.relation_dialog =
+        Some(crate::relation_dialog::RelationDialog::new(crate::relation_dialog::Relation::Child, &anchor, &app.tree));
+    h.run_steps(4);
+}
+
+#[test]
+fn add_child_dialog_focuses_given_names_and_enter_adds() {
+    let mut h = harness();
+    let before = h.state().tree.people.len();
+    open_add_child(&mut h);
+    // the surname is prefilled, yet typing goes straight into "Given names"
+    h.get_by_label("Add child of Erik Lindqvist");
+    text_input(&h, "Lindqvist");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().tree.people.len(), before, "Enter with only a prefilled surname adds nobody");
+    h.event(egui::Event::Text("Anna".into()));
+    h.run_steps(3);
+    text_input(&h, "Anna");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().tree.people.len(), before + 1);
+    assert!(h.state().tree.people.iter().any(|p| p.display_name() == "Anna Lindqvist"));
+}
+
+#[test]
+fn a_second_parent_becomes_the_partner_of_the_first() {
+    let mut h = harness();
+    let app = h.state_mut();
+    let (child, father) = app
+        .apply("Setup", |doc| {
+            let child = familyx::edit::add_person(doc, "Maria", "Kask", familyx::model::Gender::Female);
+            let father = familyx::edit::add_person(doc, "Juri", "Kask", familyx::model::Gender::Male);
+            familyx::edit::link_parent(doc, &child, &father)?;
+            Ok((child, father))
+        })
+        .unwrap();
+    app.select(&child);
+    app.relation_dialog =
+        Some(crate::relation_dialog::RelationDialog::new(crate::relation_dialog::Relation::Parent, &child, &app.tree));
+    h.run_steps(4);
+    h.get_by_label("The new parent and Juri Kask are a couple");
+    h.event(egui::Event::Text("Anna".into()));
+    h.run_steps(3);
+    h.get_by_label("Anna and Juri Kask are a couple");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let app = h.state();
+    let mother = app.tree.parents(&child).into_iter().find(|p| *p != father).expect("second parent").to_string();
+    assert_eq!(app.tree.person(&mother).unwrap().display_name(), "Anna");
+    assert_eq!(app.tree.spouses(&father), vec![mother.as_str()]);
+}
+
+#[test]
+fn toasts_stay_clear_of_the_person_panel() {
+    let mut h = harness();
+    open_add_child(&mut h);
+    h.event(egui::Event::Text("Toast".into()));
+    h.run_steps(3);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    let undo = h.get_all_by_label("Undo").last().unwrap().rect();
+    let tree_area = h.get_by_label("Family of Erik Lindqvist").rect();
+    let panel = h.get_by_label("Delete this person…").rect();
+    assert!(undo.max.x <= panel.min.x, "toast {undo:?} overlaps the person panel {panel:?}");
+    assert!(undo.center().x < panel.min.x && tree_area.min.x < undo.min.x);
+}
+
+/// egui's default proportional fonts have no glyph for these; they draw as empty boxes.
+#[test]
+fn user_facing_text_avoids_glyphs_missing_from_the_default_fonts() {
+    const MISSING: &[char] = &['\u{25cf}', '\u{2192}', '\u{2190}', '\u{2191}', '\u{2193}', '\u{2715}', '\u{25be}'];
+    let sources = [
+        ("app.rs", include_str!("app.rs")),
+        ("person_panel.rs", include_str!("person_panel.rs")),
+        ("sources.rs", include_str!("sources.rs")),
+        ("tree_view.rs", include_str!("tree_view.rs")),
+        ("relation_dialog.rs", include_str!("relation_dialog.rs")),
+        ("toasts.rs", include_str!("toasts.rs")),
+    ];
+    for (file, text) in sources {
+        for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim_start().starts_with("//")) {
+            if let Some(c) = line.chars().find(|c| MISSING.contains(c)) {
+                panic!("{file}:{}: {c:?} is not in egui's default fonts", n + 1);
+            }
+        }
+    }
+}

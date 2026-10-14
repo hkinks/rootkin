@@ -7,7 +7,8 @@
 use base64::Engine;
 use rand::RngCore;
 
-use crate::doc::{Document, Element};
+use crate::doc::{Document, Element, Node};
+use crate::index::{Appended, LinkKind};
 use crate::model::{Date, Gender, Id};
 
 // Child element order per type, derived from files the app writes.
@@ -166,15 +167,26 @@ pub enum EditError {
 
 pub type EditResult<T> = std::result::Result<T, EditError>;
 
+/// A top-level collection, to add or remove children. That may invalidate the
+/// document's lookup tables (see `index`), so they are dropped.
 fn collection<'a>(doc: &'a mut Document, name: &str) -> &'a mut Element {
+    doc.forget_index();
+    collection_keep(doc, name)
+}
+
+/// Like [`collection`], for changing children in place or appending exactly one
+/// child that is then reported with `Document::note_appended`.
+fn collection_keep<'a>(doc: &'a mut Document, name: &str) -> &'a mut Element {
     doc.root.ensure_child(name, FAMILY_ORDER)
 }
 
 fn person_mut<'a>(doc: &'a mut Document, id: &str) -> EditResult<&'a mut Element> {
-    collection(doc, "PeopleCollection")
-        .elements_mut()
-        .find(|p| p.name == "Person" && p.attr("Id").as_deref() == Some(id))
-        .ok_or_else(|| EditError::NoPerson(id.to_string()))
+    let pos = doc.person_pos(id);
+    let people = collection_keep(doc, "PeopleCollection");
+    match pos.and_then(|p| people.children.get_mut(p)) {
+        Some(Node::Element(person)) => Ok(person),
+        _ => Err(EditError::NoPerson(id.to_string())),
+    }
 }
 
 fn touch(person: &mut Element) {
@@ -184,9 +196,7 @@ fn touch(person: &mut Element) {
 }
 
 fn person_exists(doc: &Document, id: &str) -> bool {
-    doc.root
-        .child("PeopleCollection")
-        .is_some_and(|c| c.children_named("Person").any(|p| p.attr("Id").as_deref() == Some(id)))
+    doc.person_pos(id).is_some()
 }
 
 // ---------------------------------------------------------------- document
@@ -241,7 +251,8 @@ pub fn add_person(doc: &mut Document, given: &str, surname: &str, gender: Gender
     name.push(Element::new("Nickname"));
     name.push(text_el("IsPrimary", "true"));
     person.ensure_child("PersonNameCollection", PERSON_ORDER).ensure_child("Names", &[]).push(name);
-    collection(doc, "PeopleCollection").push(person);
+    collection_keep(doc, "PeopleCollection").push(person);
+    doc.note_appended(Appended::Person);
     // set_gender cannot fail: the person was just added
     let _ = set_gender(doc, &id, gender);
     id
@@ -380,11 +391,32 @@ fn fact_mut<'a>(doc: &'a mut Document, fact_id: &str) -> EditResult<&'a mut Elem
         }
         el.elements_mut().find_map(|c| find(c, id))
     }
-    let owner = ["PeopleCollection", "RelationshipCollection"]
-        .into_iter()
-        .find(|c| doc.root.child(c).is_some_and(|c| contains(c, fact_id)))
-        .ok_or_else(|| EditError::NoFact(fact_id.to_string()))?;
-    find(doc.root.child_mut(owner).expect("found above"), fact_id).ok_or_else(|| EditError::NoFact(fact_id.to_string()))
+    // the lookup table says which person or link to look in; scan if it is wrong
+    let home = doc.fact_home(fact_id).filter(|&(on_link, pos)| {
+        let name = if on_link { "RelationshipCollection" } else { "PeopleCollection" };
+        let owner = doc.root.child(name).and_then(|c| c.children.get(pos));
+        matches!(owner, Some(Node::Element(e)) if contains(e, fact_id))
+    });
+    let (owner, pos) = match home {
+        Some((on_link, pos)) => (if on_link { "RelationshipCollection" } else { "PeopleCollection" }, Some(pos)),
+        None => {
+            doc.forget_facts();
+            let owner = ["PeopleCollection", "RelationshipCollection"]
+                .into_iter()
+                .find(|c| doc.root.child(c).is_some_and(|c| contains(c, fact_id)))
+                .ok_or_else(|| EditError::NoFact(fact_id.to_string()))?;
+            (owner, None)
+        }
+    };
+    let collection = doc.root.child_mut(owner).expect("found above");
+    let from = match pos {
+        Some(pos) => match &mut collection.children[pos] {
+            Node::Element(e) => e,
+            _ => unreachable!("checked above"),
+        },
+        None => collection,
+    };
+    find(from, fact_id).ok_or_else(|| EditError::NoFact(fact_id.to_string()))
 }
 
 /// Whether the app marks the first fact with this tag `IsPrimary` (in files
@@ -409,15 +441,20 @@ pub fn add_fact(doc: &mut Document, person_id: &str, tag: &str, input: &FactInpu
     write_fact_fields(&mut fact, input);
     person.ensure_child("Facts", PERSON_ORDER).push(fact);
     touch(person);
+    if let Some(pos) = doc.person_pos(person_id) {
+        doc.note_fact(&id, (false, pos));
+    }
     Ok(id)
 }
 
 /// Add a fact (e.g. `MARR`) to a couple; returns its id.
 pub fn add_couple_fact(doc: &mut Document, link_id: &str, tag: &str, input: &FactInput) -> EditResult<Id> {
-    let link = collection(doc, "RelationshipCollection")
-        .elements_mut()
-        .find(|l| l.attr("Id").as_deref() == Some(link_id) && l.attr("xsi:type").as_deref() == Some("SpouseLink"))
-        .ok_or(EditError::Invalid("no such couple"))?;
+    let pos = doc.link_pos(link_id);
+    let links = collection_keep(doc, "RelationshipCollection");
+    let (pos, link) = match pos.and_then(|p| Some((p, links.children.get_mut(p)?))) {
+        Some((pos, Node::Element(l))) if l.attr("xsi:type").as_deref() == Some("SpouseLink") => (pos, l),
+        _ => return Err(EditError::Invalid("no such couple")),
+    };
     let facts = link.ensure_child("Facts", &["Facts", "SpouseRelationshipStatus", "NumberOfChildren"]);
     let is_first =
         takes_primary(tag) && !facts.children_named("Fact").any(|f| f.child_text("Tag").as_deref() == Some(tag));
@@ -430,6 +467,7 @@ pub fn add_couple_fact(doc: &mut Document, link_id: &str, tag: &str, input: &Fac
     write_fact_fields(&mut fact, input);
     fact.ensure_child("IsFamily", FACT_ORDER).set_text("true");
     facts.push(fact);
+    doc.note_fact(&id, (true, pos));
     Ok(id)
 }
 
@@ -500,6 +538,13 @@ fn relationship_links(doc: &Document) -> impl Iterator<Item = &Element> {
 }
 
 fn link_kind_between(doc: &Document, kind: &str, a: &str, b: &str, ordered: bool) -> Option<Id> {
+    if let Some(kind) = LinkKind::from_type(kind) {
+        let pos = doc.link_between(kind, a, b, ordered)?;
+        return match doc.root.child("RelationshipCollection")?.children.get(pos) {
+            Some(Node::Element(l)) => Some(l.attr("Id").unwrap_or_default().into_owned()),
+            _ => None,
+        };
+    }
     relationship_links(doc)
         .find(|l| {
             let p1 = l.attr("Person1Id");
@@ -512,21 +557,11 @@ fn link_kind_between(doc: &Document, kind: &str, a: &str, b: &str, ordered: bool
 }
 
 fn parents_of(doc: &Document, child: &str) -> Vec<Id> {
-    relationship_links(doc)
-        .filter(|l| {
-            l.attr("xsi:type").as_deref() == Some("ParentChildLink") && l.attr("Person2Id").as_deref() == Some(child)
-        })
-        .filter_map(|l| l.attr("Person1Id").map(|s| s.into_owned()))
-        .collect()
+    doc.parents_of(child)
 }
 
 fn children_of(doc: &Document, parent: &str) -> Vec<Id> {
-    relationship_links(doc)
-        .filter(|l| {
-            l.attr("xsi:type").as_deref() == Some("ParentChildLink") && l.attr("Person1Id").as_deref() == Some(parent)
-        })
-        .filter_map(|l| l.attr("Person2Id").map(|s| s.into_owned()))
-        .collect()
+    doc.children_of(parent)
 }
 
 fn new_link(kind: &str, p1: &str, p2: &str) -> Element {
@@ -573,7 +608,8 @@ pub fn link_parent(doc: &mut Document, child: &str, parent: &str) -> EditResult<
         return Err(EditError::Invalid("that person is already a child of this one"));
     }
     let other_parents = parents_of(doc, child);
-    collection(doc, "RelationshipCollection").push(new_link("ParentChildLink", parent, child));
+    collection_keep(doc, "RelationshipCollection").push(new_link("ParentChildLink", parent, child));
+    doc.note_appended(Appended::Link);
     for other in other_parents {
         if let Some(family) = link_kind_between(doc, "SpouseLink", parent, &other, false) {
             add_family_child_link(doc, child, &family)?;
@@ -592,7 +628,8 @@ pub fn link_spouse(doc: &mut Document, a: &str, b: &str) -> EditResult<Id> {
     }
     let link = new_link("SpouseLink", a, b);
     let link_id = link.attr("Id").unwrap_or_default().into_owned();
-    collection(doc, "RelationshipCollection").push(link);
+    collection_keep(doc, "RelationshipCollection").push(link);
+    doc.note_appended(Appended::Link);
     for p in [a, b] {
         let person = person_mut(doc, p)?;
         person
@@ -961,10 +998,12 @@ pub struct SourceInput {
 }
 
 fn source_mut<'a>(doc: &'a mut Document, id: &str) -> EditResult<&'a mut Element> {
-    collection(doc, "SourceCollection")
-        .elements_mut()
-        .find(|s| s.name == "Source" && s.attr("Id").as_deref() == Some(id))
-        .ok_or_else(|| EditError::NoSource(id.to_string()))
+    let pos = doc.source_pos(id);
+    let sources = collection_keep(doc, "SourceCollection");
+    match pos.and_then(|p| sources.children.get_mut(p)) {
+        Some(Node::Element(source)) => Ok(source),
+        _ => Err(EditError::NoSource(id.to_string())),
+    }
 }
 
 fn write_source_fields(doc: &mut Document, id: &str, input: &SourceInput) -> EditResult<()> {
@@ -1016,7 +1055,8 @@ pub fn add_source(doc: &mut Document, input: &SourceInput) -> EditResult<Id> {
         .with_attr("Creation", &utc_now());
     let id = source.attr("Id").unwrap_or_default().into_owned();
     source.push(Element::new("Repositories"));
-    collection(doc, "SourceCollection").push(source);
+    collection_keep(doc, "SourceCollection").push(source);
+    doc.note_appended(Appended::Source);
     if let Err(e) = write_source_fields(doc, &id, input) {
         collection(doc, "SourceCollection").remove_children_where(|s| s.attr("Id").as_deref() == Some(id.as_str()));
         return Err(e);

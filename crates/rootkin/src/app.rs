@@ -18,6 +18,8 @@ const UNDO_LIMIT: usize = 100;
 /// A finished background job.
 enum Job {
     Opened(PathBuf, Result<Package, String>),
+    /// A converted genealogy file and a summary of what came in.
+    Imported(PathBuf, Result<(Package, crate::formats::Summary), String>),
     Saved(PathBuf, u64, Result<(), String>),
 }
 
@@ -62,6 +64,8 @@ pub struct App {
     /// An informational message shown in a dialog (e.g. after converting an old file).
     notice: Option<String>,
     show_about: bool,
+    /// File name and result of the last import, shown until dismissed.
+    import_summary: Option<(String, crate::formats::Summary)>,
     pub(crate) sources_ui: crate::sources::SourcesUi,
 }
 
@@ -69,6 +73,7 @@ pub struct App {
 enum Pending {
     Close,
     Open(PathBuf),
+    Import(PathBuf),
     New,
 }
 
@@ -104,12 +109,18 @@ impl App {
             error_dialog: None,
             notice: None,
             show_about: false,
+            import_summary: None,
             sources_ui: crate::sources::SourcesUi::default(),
         };
         if let Some(path) = path {
             app.start_open(path);
         }
         app
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_busy(&self) -> bool {
+        self.busy.is_some()
     }
 
     fn dirty(&self) -> bool {
@@ -157,6 +168,14 @@ impl App {
                 Job::Opened(path, Err(e)) => {
                     self.error_dialog = Some(format!("Could not open {}:\n\n{e}", path.display()));
                 }
+                Job::Imported(path, Ok((pkg, summary))) => {
+                    self.load(pkg, None);
+                    self.saved_version = u64::MAX;
+                    self.import_summary = Some((file_name(&path), summary));
+                }
+                Job::Imported(path, Err(e)) => {
+                    self.error_dialog = Some(format!("Could not import {}:\n\n{e}", path.display()));
+                }
                 Job::Saved(path, version, Ok(())) => {
                     self.saved_version = version;
                     crate::recent::remember(&mut self.recent, &path);
@@ -178,6 +197,7 @@ impl App {
         match self.pending.take() {
             Some(Pending::Close) => self.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Some(Pending::Open(path)) => self.start_open(path),
+            Some(Pending::Import(path)) => self.start_import(path),
             Some(Pending::New) => self.new_tree(),
             None => {}
         }
@@ -640,7 +660,7 @@ impl App {
             }
             if self.pkg.is_some() {
                 if self.dirty() {
-                    ui.label(RichText::new("● Unsaved changes").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
+                    ui.label(RichText::new("Unsaved changes").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
                         .on_hover_text("Press Ctrl+S to save");
                 } else {
                     ui.label(RichText::new("✔ All changes saved").color(Color32::from_rgb(0x60, 0xb0, 0x60)));
@@ -829,6 +849,43 @@ impl App {
             });
         }
 
+        if let Some((file, summary)) = &self.import_summary {
+            let mut choice = None;
+            egui::Modal::new(egui::Id::new("import_summary")).show(ctx, |ui| {
+                ui.set_max_width(520.0);
+                ui.heading(format!("Imported {file}"));
+                ui.label(format!("{} came in. It is open as a new tree that is not saved yet.", summary.headline()));
+                if !summary.notes.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(format!("{} things could not be brought over exactly:", summary.notes.len()));
+                    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                        for note in &summary.notes {
+                            ui.label(format!("- {note}"));
+                        }
+                    });
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("Save as .familyx…").strong()).clicked() {
+                        choice = Some(true);
+                    }
+                    if ui.button("Look around first").clicked() {
+                        choice = Some(false);
+                    }
+                    if ui.button("Copy details").clicked() {
+                        ui.ctx().copy_text(summary.details(file));
+                    }
+                });
+            });
+            if let Some(save) = choice {
+                self.import_summary = None;
+                if save {
+                    self.flush_form();
+                    self.pick_save_as();
+                }
+            }
+        }
+
         if self.show_about {
             egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
                 ui.heading("Rootkin");
@@ -849,6 +906,7 @@ impl App {
 
     // ------------------------------------------------------------ import/export
 
+    /// Pick a file, then import it once unsaved changes are dealt with.
     fn import(&mut self, ctx: &egui::Context) {
         let _ = ctx;
         let Some(path) =
@@ -856,18 +914,21 @@ impl App {
         else {
             return;
         };
-        match crate::formats::import(&path) {
-            Ok((pkg, report)) => {
-                self.flush_form();
-                if self.dirty() {
-                    self.toasts.info("Your previous tree had unsaved changes; it is still on disk unchanged");
-                }
-                self.load(pkg, None);
-                self.saved_version = u64::MAX;
-                self.toasts.info(format!("Imported {}. Save it as a .familyx file to keep it.", report));
-            }
-            Err(e) => self.error_dialog = Some(format!("Could not import {}:\n\n{e}", path.display())),
-        }
+        self.request_import(path);
+    }
+
+    pub(crate) fn request_import(&mut self, path: PathBuf) {
+        self.guarded(Pending::Import(path));
+    }
+
+    /// Converting a big file takes a while; do it off the UI thread.
+    fn start_import(&mut self, path: PathBuf) {
+        let tx = self.jobs.0.clone();
+        self.busy = Some(format!("Importing {}…", file_name(&path)));
+        std::thread::spawn(move || {
+            let result = crate::formats::import(&path);
+            let _ = tx.send(Job::Imported(path, result));
+        });
     }
 
     fn save_copy_for_app12(&mut self) {
@@ -938,7 +999,7 @@ fn migration_notice(pkg: &Package) -> Option<String> {
         report.media,
     );
     if report.from_version == familyx::migrate::schema14::APP12_VERSION {
-        msg.push_str("\n\nTo keep using the tree in My Family Tree 12, use File → Save a copy for My Family Tree 12…");
+        msg.push_str("\n\nTo keep using the tree in My Family Tree 12, use File > Save a copy for My Family Tree 12…");
     }
     if !report.dropped.is_empty() {
         msg.push_str(&format!("\n\nAs the original app does, Rootkin left out: {}.", report.dropped.join("; ")));
@@ -973,12 +1034,13 @@ impl eframe::App for App {
         self.shortcuts(&ctx);
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
 
-        if self.pkg.is_none() {
-            egui::CentralPanel::default().show(ui, |ui| self.welcome(ui));
+        // toasts sit at the bottom of the central area, clear of the side panels
+        let central = if self.pkg.is_none() {
+            egui::CentralPanel::default().show(ui, |ui| self.welcome(ui)).response.rect
         } else {
             egui::Panel::left("people").default_size(270.0).show(ui, |ui| self.people_list(ui));
             egui::Panel::right("person").default_size(400.0).show(ui, |ui| self.person_panel(ui));
-            egui::CentralPanel::default().show(ui, |ui| {
+            let panel = egui::CentralPanel::default().show(ui, |ui| {
                 if self.tree.people.is_empty() {
                     self.empty_tree(ui);
                     return;
@@ -994,12 +1056,13 @@ impl eframe::App for App {
                     None => {}
                 }
             });
-        }
+            panel.response.rect
+        };
         self.relation_dialog_ui(&ctx);
         self.delete_dialog_ui(&ctx);
         self.unlink_dialog_ui(&ctx);
         self.dialogs(&ctx);
-        if self.toasts.show(&ctx) {
+        if self.toasts.show(&ctx, central) {
             self.undo(false);
         }
     }

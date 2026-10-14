@@ -4,6 +4,7 @@
 //! return an [`ImportReport`] listing what could not be represented.
 //! Exports are read-only views of a package's [`familyx::model::Tree`].
 
+mod ansel;
 mod dates;
 mod families;
 pub mod gedcom;

@@ -332,7 +332,8 @@ impl Node {
     }
 }
 
-/// UTF-8 (with or without BOM) or UTF-16; invalid UTF-8 is read as Latin-1.
+/// UTF-8 (with or without BOM) or UTF-16. Invalid UTF-8 is ANSEL if the header
+/// says so, otherwise Latin-1.
 fn decode(bytes: &[u8], warnings: &mut Vec<String>) -> String {
     let utf16 = |data: &[u8], le: bool| {
         let units =
@@ -348,8 +349,9 @@ fn decode(bytes: &[u8], warnings: &mut Vec<String>) -> String {
             let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
             match std::str::from_utf8(bytes) {
                 Ok(s) => s.to_string(),
+                Err(_) if crate::ansel::declared(bytes) => crate::ansel::decode(bytes),
                 Err(_) => {
-                    warnings.push("file is not valid UTF-8; read as Latin-1 (ANSEL is not supported)".into());
+                    warnings.push("file is not UTF-8; read as Western European text (ANSI/Latin-1)".into());
                     bytes.iter().map(|&b| b as char).collect()
                 }
             }
@@ -499,12 +501,6 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
         adopted: HashSet::new(),
         famc_children: HashMap::new(),
     };
-    if let Some(ch) = roots[0].child_value("CHAR") {
-        if !matches!(ch.to_ascii_uppercase().as_str(), "UTF-8" | "UNICODE" | "UTF8") {
-            imp.warnings.push(format!("header declares character set {ch}; text was read as UTF-8 / UTF-16"));
-        }
-    }
-
     for n in &roots {
         match (&n.xref, n.tag.as_str()) {
             (Some(x), "NOTE") => {
@@ -885,6 +881,17 @@ mod tests {
         let mut bom = vec![0xef, 0xbb, 0xbf];
         bom.extend(text.as_bytes());
         assert_eq!(decode(&bom, &mut warnings), text);
+    }
+
+    #[test]
+    fn decodes_ansel_files() {
+        let mut warnings = Vec::new();
+        let bytes = b"0 HEAD\n1 CHAR ANSEL\n0 @I1@ INDI\n1 NAME Liisu /M\xe8ae/\n1 NAME Ren\xe2e /P\xe4oder/\n0 TRLR\n";
+        let text = decode(bytes, &mut warnings);
+        assert!(text.contains("Liisu /Mäe/") && text.contains("René /Põder/"));
+        assert!(warnings.is_empty());
+        let (_, report) = crate::import(bytes, crate::Format::Gedcom).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     }
 
     #[test]

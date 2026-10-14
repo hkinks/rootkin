@@ -141,7 +141,7 @@ impl App {
                             .desired_width(ui.available_width() - 40.0),
                     );
                     if !tree.repositories.is_empty() {
-                        egui::ComboBox::from_id_salt("source_repository").width(30.0).selected_text("▾").show_ui(
+                        egui::ComboBox::from_id_salt("source_repository").width(30.0).selected_text("").show_ui(
                             ui,
                             |ui| {
                                 for r in &tree.repositories {

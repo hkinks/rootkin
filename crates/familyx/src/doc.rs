@@ -19,6 +19,8 @@ pub struct Document {
     pub root: Element,
     /// Raw bytes after the root element.
     pub epilog: String,
+    /// Lookup tables for `edit`; not part of the document.
+    pub(crate) index: crate::index::IndexCell,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,7 +91,7 @@ impl Document {
             }
         }
         let root = root.ok_or_else(|| Error::Xml("no root element".into()))?;
-        Ok(Document { prolog, root, epilog })
+        Ok(Document { prolog, root, epilog, index: Default::default() })
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
