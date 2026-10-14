@@ -1,6 +1,22 @@
 # TODO
 
-See also [ux-review.md](ux-review.md); its "Top 5" are the next UX priorities.
+See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-review.md)
+(importing and first-hour findings; its "Recommended order" comes first).
+
+## Onboarding fixes (from onboarding-review.md)
+
+- [x] C1 Import asks before replacing a tree with unsaved changes
+- [x] C2 Import on a background thread with progress; fix the import slowdown (20,000 people: 347 s)
+- [x] C3 Decode ANSEL GEDCOM (names are corrupted today)
+- [ ] H1 Import `.gdz` and `.zip` containing `.ged` / `.gramps`
+- [ ] H2 Import summary dialog in plain language (dialog and "Copy details" done; plain-language grouping and "Save report" open)
+- [ ] H3 Keep married names, GEDCOM 7 shared notes, date phrases, `EVEN`+`TYPE`, photo URLs
+- [ ] H4 Import into the current tree; find and merge duplicates
+- [x] H5 Second parent becomes the first parent's partner
+- [x] H6 "Add child" focuses Given names; Enter needs a given name
+- [x] H7 Toasts no longer cover the person panel buttons
+- [x] M7 Symbols the default fonts can't draw
+- [ ] M1-M6, M8 and Low items, see the review
 
 ## Next steps
 
