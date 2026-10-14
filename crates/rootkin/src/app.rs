@@ -56,7 +56,9 @@ pub struct App {
     pending: Option<Pending>,
     busy: Option<String>,
     jobs: (mpsc::Sender<Job>, mpsc::Receiver<Job>),
-    recent: Vec<PathBuf>,
+    pub(crate) recent: Vec<PathBuf>,
+    /// The person panel on the right; hide it to give the tree the room.
+    pub(crate) show_person_panel: bool,
     pub(crate) toasts: Toasts,
     pub(crate) error_dialog: Option<crate::problems::Problem>,
     /// An informational message shown in a dialog (e.g. after converting an old file).
@@ -111,6 +113,7 @@ impl App {
             busy: None,
             jobs: mpsc::channel(),
             recent: crate::recent::load(),
+            show_person_panel: true,
             toasts: Toasts::default(),
             error_dialog: None,
             notice: None,
@@ -240,6 +243,17 @@ impl App {
             self.toasts.info(format!("Opened {} ({} people)", file_name(path), self.tree.people.len()));
         }
         self.path = path;
+    }
+
+    /// The made-up example family, as a new tree that is not saved yet.
+    fn try_example(&mut self) {
+        match rootkin_formats::example::build() {
+            Ok(pkg) => {
+                self.load(pkg, None);
+                self.toasts.info("This is a made-up family. Use Save as if you want to keep it.");
+            }
+            Err(e) => self.toasts.error(format!("Could not make the example tree: {e}")),
+        }
     }
 
     fn new_tree(&mut self) {
@@ -569,7 +583,7 @@ impl App {
                         ui.weak("No recent files");
                     }
                     for path in self.recent.clone() {
-                        if ui.button(path.display().to_string()).clicked() {
+                        if ui.button(file_name(&path)).on_hover_text(path.display().to_string()).clicked() {
                             self.guarded(Pending::Open(path));
                         }
                     }
@@ -665,6 +679,8 @@ impl App {
                 if ui.add_enabled(self.pkg.is_some(), egui::Button::new("Sources…")).clicked() {
                     self.sources_ui.open = true;
                 }
+                ui.checkbox(&mut self.show_person_panel, "Person panel")
+                    .on_hover_text("Hide it on a small screen to give the tree more room");
                 ui.separator();
                 egui::widgets::global_theme_preference_buttons(ui);
                 ui.label("Text size: Ctrl + / Ctrl −");
@@ -694,6 +710,14 @@ impl App {
                     ui.label(RichText::new("✔ All changes saved").color(Color32::from_rgb(0x60, 0xb0, 0x60)));
                 }
             }
+            if self.pkg.is_some() {
+                let label = if self.show_person_panel { "Hide person panel" } else { "Show person panel" };
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button(label).clicked() {
+                        self.show_person_panel = !self.show_person_panel;
+                    }
+                });
+            }
             if let Some(busy) = &self.busy {
                 ui.spinner();
                 ui.label(busy);
@@ -718,12 +742,25 @@ impl App {
             if ui.add(big("Import GEDCOM or Gramps…")).clicked() {
                 self.import(&ctx);
             }
+            if ui.link("Try the example tree").on_hover_text("A made-up family to look around in").clicked() {
+                self.try_example();
+            }
             if !self.recent.is_empty() {
                 ui.add_space(24.0);
                 ui.label(RichText::new("Recent").strong());
                 for path in self.recent.clone() {
-                    if ui.link(path.display().to_string()).clicked() {
-                        self.start_open(path);
+                    ui.add_space(4.0);
+                    if ui
+                        .link(RichText::new(file_name(&path)).strong())
+                        .on_hover_text(path.display().to_string())
+                        .clicked()
+                    {
+                        self.start_open(path.clone());
+                    }
+                    let folder = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+                    ui.label(RichText::new(folder).weak().small());
+                    if ui.small_button("Remove from list").clicked() {
+                        crate::recent::forget(&mut self.recent, &path);
                     }
                 }
             }
@@ -1058,7 +1095,11 @@ impl eframe::App for App {
             egui::CentralPanel::default().show(ui, |ui| self.welcome(ui)).response.rect
         } else {
             egui::Panel::left("people").default_size(270.0).show(ui, |ui| self.people_list(ui));
-            egui::Panel::right("person").default_size(400.0).show(ui, |ui| self.person_panel(ui));
+            if self.show_person_panel {
+                // on a narrow window the panel takes less so the tree isn't squeezed
+                let width = (ui.ctx().content_rect().width() * 0.3).clamp(280.0, 400.0);
+                egui::Panel::right("person").default_size(width).show(ui, |ui| self.person_panel(ui));
+            }
             let panel = egui::CentralPanel::default().show(ui, |ui| {
                 if self.tree.people.is_empty() {
                     self.empty_tree(ui);

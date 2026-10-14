@@ -20,4 +20,3 @@ path = "src/main.rs"
 familyx = { path = "../familyx" }
 rootkin-formats = { path = "../rootkin-formats" }
 anyhow = "1"
-image = { version = "0.25", default-features = false, features = ["png"] }

@@ -16,14 +16,24 @@ pub fn load() -> Vec<PathBuf> {
     text.lines().filter(|l| !l.is_empty()).map(PathBuf::from).filter(|p| p.exists()).take(MAX).collect()
 }
 
+/// Drop `path` from the list and persist it (best effort).
+pub fn forget(list: &mut Vec<PathBuf>, path: &Path) {
+    list.retain(|p| p != path);
+    save(list);
+}
+
+fn save(list: &[PathBuf]) {
+    if let Some(file) = store() {
+        let text: String = list.iter().map(|p| format!("{}\n", p.display())).collect();
+        let _ = std::fs::create_dir_all(file.parent().expect("has a parent")).and_then(|_| std::fs::write(file, text));
+    }
+}
+
 /// Move `path` to the front of the list and persist it (best effort).
 pub fn remember(list: &mut Vec<PathBuf>, path: &Path) {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     list.retain(|p| *p != path);
     list.insert(0, path);
     list.truncate(MAX);
-    if let Some(file) = store() {
-        let text: String = list.iter().map(|p| format!("{}\n", p.display())).collect();
-        let _ = std::fs::create_dir_all(file.parent().expect("has a parent")).and_then(|_| std::fs::write(file, text));
-    }
+    save(list);
 }

@@ -486,3 +486,46 @@ fn a_small_people_list_has_no_letter_strip() {
     assert!(h.query_by_label("Jump to this letter").is_none());
     h.get_by_label_contains("P49");
 }
+
+#[test]
+fn recent_files_show_name_and_folder_and_can_be_removed() {
+    let mut h = Harness::builder().with_size([1200.0, 800.0]).build_eframe(|cc| App::new(cc, None));
+    h.state_mut().recent = vec!["/home/maria/trees/Kask Family.familyx".into(), "/home/maria/old/Tamm.familyx".into()];
+    h.run_steps(3);
+    h.get_by_label("Kask Family.familyx");
+    h.get_by_label("/home/maria/trees");
+    assert!(h.query_by_label("/home/maria/trees/Kask Family.familyx").is_none());
+    h.get_all_by_label("Remove from list").next().unwrap().click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Kask Family.familyx").is_none());
+    h.get_by_label("Tamm.familyx");
+    assert_eq!(h.state().recent.len(), 1);
+}
+
+#[test]
+fn the_example_tree_opens_unsaved_from_the_welcome_screen() {
+    let mut h = Harness::builder().with_size([1200.0, 800.0]).build_eframe(|cc| App::new(cc, None));
+    h.run_steps(2);
+    h.get_by_label("Try the example tree").click();
+    h.run_steps(4);
+    assert!(h.state().path.is_none());
+    assert!(h.state().tree.people.len() > 10);
+    h.get_by_label_contains("Unsaved changes");
+    h.get_by_label("Hide person panel");
+}
+
+#[test]
+fn the_person_panel_can_be_hidden_to_give_the_tree_room() {
+    let mut h = harness();
+    h.get_by_label("Delete this person…");
+    let before = h.get_by_label("Fit").rect(); // right edge of the tree area
+    h.get_by_label("Hide person panel").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("Delete this person…").is_none());
+    h.get_by_label("Show person panel");
+    let after = h.get_by_label("Fit").rect();
+    assert!(after.max.x > before.max.x + 100.0, "{before:?} -> {after:?}");
+    h.get_by_label("Show person panel").click();
+    h.run_steps(4);
+    h.get_by_label("Delete this person…");
+}
