@@ -155,6 +155,18 @@ pub fn fact_label(tag: &str) -> &str {
         "BIRT" => "Birth",
         "DEAT" => "Death",
         "MARR" => "Marriage",
+        // the app's relationship types for a couple
+        "MARR_Civil" => "Civil marriage",
+        "MARR_Religious" => "Religious marriage",
+        "MARR_CommonLaw" => "Common-law marriage",
+        "MARR_OtherMarriage" => "Other marriage",
+        "MARR_Partnership" => "Partnership",
+        "MARR_RegisteredPartnership" => "Registered partnership",
+        "MARR_LivingTogether" => "Living together",
+        "MARR_LivingTogetherApart" => "Living apart together",
+        "MARR_NotMarried" => "Not married",
+        "MARR_Other" => "Other relationship",
+        "MARR_Unknown" => "Relationship (type unknown)",
         "DIV" => "Divorce",
         "OCCU" => "Occupation",
         "BURI" => "Burial",
@@ -426,6 +438,9 @@ fn read_person(p: &Element) -> Person {
         .path("PersonNameCollection/Names")
         .into_iter()
         .flat_map(|n| n.children_named("Name"))
+        // the app keeps an empty trailing <Name/> placeholder (no child elements); skip it.
+        // A name added for editing has its (still empty) fields and is kept.
+        .filter(|n| n.elements().next().is_some())
         .map(|n| Name {
             id: attr(n, "Id"),
             given: n.child_text("Names").unwrap_or_default(),
@@ -436,8 +451,6 @@ fn read_person(p: &Element) -> Person {
             is_primary: n.child_text("IsPrimary").as_deref() == Some("true"),
             name_type: n.child_text("NameType").unwrap_or_default(),
         })
-        // the app keeps an empty trailing <Name/> placeholder; skip it
-        .filter(|n| !(n.given.is_empty() && n.surname.is_empty() && n.nickname.is_empty()))
         .collect();
     Person {
         id: attr(p, "Id"),
