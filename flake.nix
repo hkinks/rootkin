@@ -16,7 +16,8 @@
           version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
-          cargoBuildFlags = [ "-p" "rootkin" "-p" "rootkin-cli" ];
+          # Only the app; rootkin-cli is a developer tool (`cargo run -p rootkin-cli`)
+          cargoBuildFlags = [ "-p" "rootkin" ];
           # Tests run in CI and in `nix flake check` (checks.tests), not on every install
           doCheck = false;
           nativeBuildInputs = [ pkgs.makeWrapper ];
