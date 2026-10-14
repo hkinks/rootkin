@@ -5,6 +5,7 @@
 //! Exports are read-only views of a package's [`familyx::model::Tree`].
 
 mod ansel;
+mod archive;
 mod dates;
 mod families;
 pub mod gedcom;
@@ -29,8 +30,10 @@ pub enum Error {
     Gedcom(String),
     #[error("Gramps XML: {0}")]
     Gramps(String),
-    #[error("cannot tell the file format of {0} (expected .ged or .gramps)")]
+    #[error("cannot tell the file format of {0} (expected .ged, .gramps, .gdz or .zip)")]
     UnknownFormat(String),
+    #[error("{0}")]
+    Archive(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -193,6 +196,11 @@ pub fn import(bytes: &[u8], format: Format) -> Result<(Package, ImportReport)> {
     import_with(bytes, format, &|_| None)
 }
 
+/// Import a zip file (`.gdz`, or a `.zip` holding a `.ged` / `.gramps`).
+pub fn import_zip(bytes: &[u8]) -> Result<(Package, ImportReport)> {
+    archive::import(bytes)
+}
+
 /// Import, loading referenced photo files through `resolve`.
 pub fn import_with(bytes: &[u8], format: Format, resolve: Resolve) -> Result<(Package, ImportReport)> {
     match format {
@@ -224,9 +232,13 @@ fn export_inner(pkg: &Package, format: Format, media: &ExportMedia) -> Result<Ve
 
 /// Import a file, detecting its format from content and extension. Photos
 /// are looked up relative to the file (also by bare file name next to it).
+/// A zip (`.gdz`, or `.zip` holding a `.ged` / `.gramps`) is read in place.
 pub fn import_path(path: impl AsRef<Path>) -> Result<(Package, ImportReport)> {
     let path = path.as_ref();
     let bytes = std::fs::read(path)?;
+    if archive::is_zip(&bytes) {
+        return archive::import(&bytes);
+    }
     let format = Format::detect(Some(path), &bytes).ok_or_else(|| Error::UnknownFormat(path.display().to_string()))?;
     let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let resolve = move |reference: &str| {

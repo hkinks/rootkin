@@ -8,7 +8,7 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 - [x] C1 Import asks before replacing a tree with unsaved changes
 - [x] C2 Import on a background thread with progress; fix the import slowdown (20,000 people: 347 s)
 - [x] C3 Decode ANSEL GEDCOM (names are corrupted today)
-- [ ] H1 Import `.gdz` and `.zip` containing `.ged` / `.gramps`
+- [x] H1 Import `.gdz` and `.zip` containing `.ged` / `.gramps`
 - [ ] H2 Import summary dialog in plain language (dialog and "Copy details" done; plain-language grouping and "Save report" open)
 - [ ] H3 Keep married names, GEDCOM 7 shared notes, date phrases, `EVEN`+`TYPE`, photo URLs
 - [ ] H4 Import into the current tree; find and merge duplicates

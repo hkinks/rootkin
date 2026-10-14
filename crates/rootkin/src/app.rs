@@ -909,8 +909,9 @@ impl App {
     /// Pick a file, then import it once unsaved changes are dealt with.
     fn import(&mut self, ctx: &egui::Context) {
         let _ = ctx;
-        let Some(path) =
-            rfd::FileDialog::new().add_filter("Genealogy files", &["ged", "gedcom", "gramps", "xml"]).pick_file()
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Genealogy files", &["ged", "gedcom", "gramps", "xml", "gdz", "zip"])
+            .pick_file()
         else {
             return;
         };

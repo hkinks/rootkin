@@ -15,6 +15,7 @@ readme = "../../README.md"
 [dependencies]
 familyx = { path = "../familyx" }
 flate2 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 thiserror = "2"
 unicode-normalization = "0.1"
