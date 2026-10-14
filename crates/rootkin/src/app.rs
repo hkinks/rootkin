@@ -994,12 +994,13 @@ impl eframe::App for App {
         self.shortcuts(&ctx);
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
 
-        if self.pkg.is_none() {
-            egui::CentralPanel::default().show(ui, |ui| self.welcome(ui));
+        // toasts sit at the bottom of the central area, clear of the side panels
+        let central = if self.pkg.is_none() {
+            egui::CentralPanel::default().show(ui, |ui| self.welcome(ui)).response.rect
         } else {
             egui::Panel::left("people").default_size(270.0).show(ui, |ui| self.people_list(ui));
             egui::Panel::right("person").default_size(400.0).show(ui, |ui| self.person_panel(ui));
-            egui::CentralPanel::default().show(ui, |ui| {
+            let panel = egui::CentralPanel::default().show(ui, |ui| {
                 if self.tree.people.is_empty() {
                     self.empty_tree(ui);
                     return;
@@ -1015,12 +1016,13 @@ impl eframe::App for App {
                     None => {}
                 }
             });
-        }
+            panel.response.rect
+        };
         self.relation_dialog_ui(&ctx);
         self.delete_dialog_ui(&ctx);
         self.unlink_dialog_ui(&ctx);
         self.dialogs(&ctx);
-        if self.toasts.show(&ctx) {
+        if self.toasts.show(&ctx, central) {
             self.undo(false);
         }
     }

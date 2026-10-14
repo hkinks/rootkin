@@ -248,3 +248,18 @@ fn a_second_parent_becomes_the_partner_of_the_first() {
     assert_eq!(app.tree.person(&mother).unwrap().display_name(), "Anna");
     assert_eq!(app.tree.spouses(&father), vec![mother.as_str()]);
 }
+
+#[test]
+fn toasts_stay_clear_of_the_person_panel() {
+    let mut h = harness();
+    open_add_child(&mut h);
+    h.event(egui::Event::Text("Toast".into()));
+    h.run_steps(3);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    let undo = h.get_all_by_label("Undo").last().unwrap().rect();
+    let tree_area = h.get_by_label("Family of Erik Lindqvist").rect();
+    let panel = h.get_by_label("Delete this person…").rect();
+    assert!(undo.max.x <= panel.min.x, "toast {undo:?} overlaps the person panel {panel:?}");
+    assert!(undo.center().x < panel.min.x && tree_area.min.x < undo.min.x);
+}

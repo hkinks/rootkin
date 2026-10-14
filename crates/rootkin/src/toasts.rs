@@ -1,4 +1,4 @@
-//! Short-lived notifications in the bottom-right corner.
+//! Short-lived notifications at the bottom centre of the main area.
 
 use std::time::{Duration, Instant};
 
@@ -48,8 +48,8 @@ impl Toasts {
         }
     }
 
-    /// Draw; returns true if the user clicked "Undo".
-    pub fn show(&mut self, ctx: &egui::Context) -> bool {
+    /// Draw at the bottom centre of `area`; returns true if the user clicked "Undo".
+    pub fn show(&mut self, ctx: &egui::Context, area: egui::Rect) -> bool {
         let now = Instant::now();
         self.items.retain(|t| now - t.created < if t.kind == Kind::Error { ERROR_TIME } else { INFO_TIME });
         if self.items.is_empty() {
@@ -59,7 +59,8 @@ impl Toasts {
         let mut undo = false;
         let mut dismiss = None;
         egui::Area::new(egui::Id::new("toasts"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
+            .pivot(egui::Align2::CENTER_BOTTOM)
+            .fixed_pos(area.center_bottom() - egui::vec2(0.0, 16.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 for (i, t) in self.items.iter().enumerate() {
@@ -68,7 +69,7 @@ impl Toasts {
                         Kind::Error => Color32::from_rgb(0x7a, 0x1f, 0x1f),
                     };
                     egui::Frame::popup(ui.style()).fill(fill).show(ui, |ui| {
-                        ui.set_max_width(420.0);
+                        ui.set_max_width(420.0f32.min(area.width() - 32.0));
                         ui.horizontal(|ui| {
                             let text = RichText::new(&t.text);
                             ui.label(if t.kind == Kind::Error { text.color(Color32::WHITE) } else { text });
