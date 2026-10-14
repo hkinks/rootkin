@@ -325,7 +325,10 @@ fn fact_editor(
                 ui.colored_label(Color32::from_rgb(0xff, 0x80, 0x80), format!("⚠ {e} (not saved yet)"));
             }
             Ok(d) if r.has_focus() && !d.is_empty() => {
-                ui.weak(format!("Understood as: {}", d.display()));
+                match Date::ambiguity_hint(&form.date) {
+                    Some(hint) => ui.weak(format!("Understood as: {hint}")),
+                    None => ui.weak(format!("Understood as: {}", d.display())),
+                };
             }
             _ => {}
         }

@@ -430,3 +430,22 @@ fn partner_and_second_parent_default_to_the_other_gender() {
     app.relation_dialog = Some(RelationDialog::new(Relation::Parent, &erik, &app.tree));
     assert_eq!(dialog_gender(&h), Gender::Unknown);
 }
+
+#[test]
+fn the_date_field_explains_ambiguous_numeric_dates() {
+    let mut h = harness();
+    let shown =
+        h.state().tree.person(h.state().selected.as_deref().unwrap()).unwrap().fact("BIRT").unwrap().date.display();
+    text_input(&h, &shown).focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    text_input(&h, &shown).type_text("3/12/1950");
+    h.run_steps(3);
+    h.get_by_label("Understood as: 3 Dec 1950 (day/month); for 12 Mar type 12 Mar 1950");
+    // a decade is understood too
+    text_input(&h, "3/12/1950").focus();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    text_input(&h, "3/12/1950").type_text("1950s");
+    h.run_steps(3);
+    h.get_by_label("Understood as: 1950s");
+}

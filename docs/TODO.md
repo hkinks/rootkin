@@ -21,7 +21,7 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 - [x] M2 Older-file conversion notice in plain words; "Converted, not saved yet"
 - [ ] M3 Plain-language error dialogs
 - [x] M5 Sensible default gender for new partner/parent; no lone "?" in tree boxes
-- [ ] M6 Dates: decades, localized month names, ambiguous numeric dates, impossible GEDCOM dates
+- [x] M6 Dates: decades, localized month names, ambiguous numeric dates, impossible GEDCOM dates
 - [ ] M8 People list: sort by birth year within a name, surname groups, fast for 20,000 people
 - [ ] Low: recent files layout, collapsible person panel, "Try the example tree"
 

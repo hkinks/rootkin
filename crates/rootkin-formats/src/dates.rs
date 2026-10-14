@@ -42,6 +42,8 @@ pub struct DateValue {
     pub end: Ymd,
     /// Free text that could not be parsed; when set, the rest is empty.
     pub text: String,
+    /// The file's date does not exist (like `31 FEB 1850`) and was kept as text.
+    pub impossible: bool,
 }
 
 const MONTHS: [&str; 12] = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
@@ -63,6 +65,14 @@ const MONTH_NAMES: [&str; 12] = [
 impl DateValue {
     pub fn is_empty(&self) -> bool {
         self.text.is_empty() && self.start.is_empty() && self.end.is_empty()
+    }
+
+    /// No day is past the end of its month.
+    fn is_possible(&self) -> bool {
+        [&self.start, &self.end].iter().all(|y| match (y.month, y.day) {
+            (Some(m), Some(d)) => d <= familyx::date::days_in_month(y.year, m),
+            _ => true,
+        })
     }
 
     // ---- GEDCOM ----
@@ -133,10 +143,16 @@ impl DateValue {
             single(Kind::Estimated, r)
         } else if let Some(r) = after("CAL") {
             single(Kind::Calculated, r)
+        } else if let Some(range) = year_range(s) {
+            Some(range)
         } else {
             single(Kind::Exact, s)
         };
-        result.unwrap_or_else(|| DateValue { text: raw.to_string(), ..Default::default() })
+        match result {
+            Some(v) if !v.is_possible() => DateValue { text: raw.to_string(), impossible: true, ..Default::default() },
+            Some(v) => v,
+            None => DateValue { text: raw.to_string(), ..Default::default() },
+        }
     }
 
     // ---- Gramps ----
@@ -170,6 +186,27 @@ impl DateValue {
             Kind::FromOnly | Kind::ToOnly => format!("<datestr val=\"{}\"/>", esc(&self.to_gedcom())),
         }
     }
+}
+
+/// `1899-1900` or `1899–1900` (a range of years), and a decade like `1950s`.
+fn year_range(s: &str) -> Option<DateValue> {
+    let years = |a: i32, b: i32| DateValue {
+        kind: Kind::Range,
+        start: Ymd { year: Some(a), ..Default::default() },
+        end: Ymd { year: Some(b), ..Default::default() },
+        ..Default::default()
+    };
+    if let Some((a, b)) = s.split_once(['-', '–', '—']) {
+        let plain = |t: &str| t.len() >= 3 && t.bytes().all(|c| c.is_ascii_digit());
+        let (a, b) = (a.trim(), b.trim());
+        if !(plain(a) && plain(b)) {
+            return None;
+        }
+        let (a, b) = (parse_year(a)?, parse_year(b)?);
+        return (a <= b).then(|| years(a, b));
+    }
+    let decade = familyx::date::parse_decade(&s.to_lowercase())?;
+    Some(years(decade.year?, decade.end_year?))
 }
 
 fn gedcom_ymd(y: &Ymd) -> String {
@@ -322,6 +359,30 @@ mod tests {
         assert_eq!(DateValue::from_gedcom("(sometime in spring)").text, "sometime in spring");
         assert_eq!(DateValue::from_gedcom("@#DHEBREW@ 5 TSH 5700").text, "@#DHEBREW@ 5 TSH 5700");
         assert_eq!(DateValue::from_gedcom("garbled 1850s").text, "garbled 1850s");
+    }
+
+    #[test]
+    fn year_ranges_and_decades_stay_ranges() {
+        let v = DateValue::from_gedcom("1899-1900");
+        assert_eq!((v.kind, v.start.year, v.end.year), (Kind::Range, Some(1899), Some(1900)));
+        assert_eq!(v.to_gedcom(), "BET 1899 AND 1900");
+        let v = DateValue::from_gedcom("1899–1900");
+        assert_eq!((v.kind, v.end.year), (Kind::Range, Some(1900)));
+        let v = DateValue::from_gedcom("1950s");
+        assert_eq!((v.kind, v.start.year, v.end.year), (Kind::Range, Some(1950), Some(1959)));
+        // an ISO date is still a date
+        assert_eq!(DateValue::from_gedcom("1890-03-14").kind, Kind::Exact);
+    }
+
+    #[test]
+    fn impossible_dates_become_text_and_are_flagged() {
+        let v = DateValue::from_gedcom("31 FEB 1850");
+        assert!(v.impossible);
+        assert_eq!(v.text, "31 FEB 1850");
+        assert!(DateValue::from_gedcom("BET 1 JAN 1850 AND 31 APR 1851").impossible);
+        assert!(!DateValue::from_gedcom("29 FEB 1904").impossible);
+        assert!(DateValue::from_gedcom("29 FEB 1900").impossible);
+        assert!(!DateValue::from_gedcom("garbled").impossible);
     }
 
     #[test]

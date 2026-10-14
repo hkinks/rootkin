@@ -48,6 +48,31 @@ impl Date {
         self.year.is_none() && self.month.is_none() && self.day.is_none() && self.text.trim().is_empty()
     }
 
+    /// A `Range` of exactly the ten years `19x0` to `19x9`.
+    fn is_decade(&self) -> bool {
+        self.month.is_none()
+            && self.day.is_none()
+            && self.end_month.is_none()
+            && self.end_day.is_none()
+            && matches!((self.year, self.end_year), (Some(a), Some(b)) if a % 10 == 0 && b == a + 9)
+    }
+
+    /// A hint for a typed numeric date that could be read two ways, such as
+    /// `3/12/1950`: how it was read and how to get the other reading.
+    pub fn ambiguity_hint(input: &str) -> Option<String> {
+        let parts: Vec<&str> = input.trim().split('/').map(str::trim).collect();
+        let [a, b, y] = parts[..] else { return None };
+        let (a, b): (u32, u32) = (a.parse().ok()?, b.parse().ok()?);
+        let year: i32 = y.parse().ok().filter(|_| y.len() == 4)?;
+        if a == b || !(1..=12).contains(&a) || !(1..=12).contains(&b) {
+            return None;
+        }
+        let read = format_part(Some(year), Some(b), Some(a));
+        let other = format_part(Some(year), Some(a), Some(b));
+        let other_short = other.rsplit_once(' ').map_or("", |(m, _)| m);
+        Some(format!("{read} (day/month); for {other_short} type {other}"))
+    }
+
     /// Human-readable form, e.g. `14 Mar 1890`, `abt. 1950`, `between 1900 and 1910`.
     /// [`Date::parse`] reads it back to the same value.
     pub fn display(&self) -> String {
@@ -65,6 +90,7 @@ impl Date {
             "Calculated" => format!("calc. {start}"),
             "Before" => format!("before {start}"),
             "After" => format!("after {start}"),
+            "Range" if self.is_decade() => format!("{start}s"),
             "Range" => format!("between {start} and {end}"),
             "Span" => format!("from {start} to {end}"),
             "FromOnly" => format!("from {start}"),
@@ -87,6 +113,9 @@ impl Date {
             return Ok(Date { descriptor: "TextOnly".into(), text: text.trim().into(), ..Default::default() });
         }
         let lower = s.to_lowercase();
+        if let Some(decade) = parse_decade(&lower) {
+            return Ok(decade);
+        }
 
         let two = |descriptor: &str, a: &str, b: &str| -> Result<Date, String> {
             let (y, m, d) = parse_part(a)?;
@@ -143,6 +172,17 @@ impl Date {
     }
 }
 
+/// `1950s` (or `1950's`): the ten years 1950 to 1959, as the app's `Range`.
+pub fn parse_decade(s: &str) -> Option<Date> {
+    let digits = s.strip_suffix('s')?;
+    let digits = digits.strip_suffix('\'').unwrap_or(digits);
+    if !(3..=4).contains(&digits.len()) || !digits.ends_with('0') || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let year: i32 = digits.parse().ok()?;
+    Some(Date { descriptor: "Range".into(), year: Some(year), end_year: Some(year + 9), ..Default::default() })
+}
+
 fn is_year(s: &str) -> bool {
     (1..=4).contains(&s.len()) && s.chars().all(|c| c.is_ascii_digit())
 }
@@ -167,12 +207,12 @@ fn format_part(year: Option<i32>, month: Option<u32>, day: Option<u32>) -> Strin
     }
 }
 
-fn month_from_name(s: &str) -> Option<u32> {
-    let s = s.trim_end_matches('.');
-    if s.len() < 3 {
-        return None;
-    }
-    const FULL: [&str; 12] = [
+/// Month names by language (accents folded away, see [`fold`]). English
+/// comes first: it wins where a prefix like `mar` could mean another
+/// language's month.
+const MONTH_NAMES: [[&str; 12]; 7] = [
+    // English
+    [
         "january",
         "february",
         "march",
@@ -185,8 +225,166 @@ fn month_from_name(s: &str) -> Option<u32> {
         "october",
         "november",
         "december",
-    ];
-    FULL.iter().position(|m| m.starts_with(s)).map(|i| i as u32 + 1)
+    ],
+    // Estonian
+    [
+        "jaanuar",
+        "veebruar",
+        "marts",
+        "aprill",
+        "mai",
+        "juuni",
+        "juuli",
+        "august",
+        "september",
+        "oktoober",
+        "november",
+        "detsember",
+    ],
+    // Finnish
+    [
+        "tammikuu",
+        "helmikuu",
+        "maaliskuu",
+        "huhtikuu",
+        "toukokuu",
+        "kesakuu",
+        "heinakuu",
+        "elokuu",
+        "syyskuu",
+        "lokakuu",
+        "marraskuu",
+        "joulukuu",
+    ],
+    // German
+    [
+        "januar",
+        "februar",
+        "marz",
+        "april",
+        "mai",
+        "juni",
+        "juli",
+        "august",
+        "september",
+        "oktober",
+        "november",
+        "dezember",
+    ],
+    // Swedish
+    [
+        "januari",
+        "februari",
+        "mars",
+        "april",
+        "maj",
+        "juni",
+        "juli",
+        "augusti",
+        "september",
+        "oktober",
+        "november",
+        "december",
+    ],
+    // French
+    [
+        "janvier",
+        "fevrier",
+        "mars",
+        "avril",
+        "mai",
+        "juin",
+        "juillet",
+        "aout",
+        "septembre",
+        "octobre",
+        "novembre",
+        "decembre",
+    ],
+    // Spanish
+    [
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre",
+    ],
+];
+
+/// Forms that are not a prefix of a name above: short forms and the Finnish
+/// "12. maaliskuuta" case.
+const MONTH_EXTRA: &[(&str, u32)] = &[
+    ("janner", 1),
+    ("mrz", 3),
+    ("veebr", 2),
+    ("dets", 12),
+    ("setiembre", 9),
+    ("dez", 12),
+    ("janv", 1),
+    ("fevr", 2),
+    ("juil", 7),
+    ("avr", 4),
+    ("abr", 4),
+    ("ago", 8),
+    ("dic", 12),
+    ("tammi", 1),
+    ("helmi", 2),
+    ("maalis", 3),
+    ("huhti", 4),
+    ("touko", 5),
+    ("kesa", 6),
+    ("heina", 7),
+    ("syys", 9),
+    ("loka", 10),
+    ("marras", 11),
+    ("joulu", 12),
+    ("tammikuuta", 1),
+    ("helmikuuta", 2),
+    ("maaliskuuta", 3),
+    ("huhtikuuta", 4),
+    ("toukokuuta", 5),
+    ("kesakuuta", 6),
+    ("heinakuuta", 7),
+    ("elokuuta", 8),
+    ("syyskuuta", 9),
+    ("lokakuuta", 10),
+    ("marraskuuta", 11),
+    ("joulukuuta", 12),
+];
+
+/// Lowercase and drop accents so `märts`, `février` and `août` match.
+fn fold(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'ä' | 'å' | 'à' | 'á' | 'â' => 'a',
+            'ö' | 'ô' | 'ó' | 'õ' => 'o',
+            'ü' | 'û' | 'ù' | 'ú' => 'u',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'î' => 'i',
+            c => c,
+        })
+        .collect()
+}
+
+fn month_from_name(s: &str) -> Option<u32> {
+    let s = fold(s.trim_end_matches('.'));
+    if s.len() < 3 || !s.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    for names in &MONTH_NAMES {
+        if let Some(i) = names.iter().position(|m| m.starts_with(&s)) {
+            return Some(i as u32 + 1);
+        }
+    }
+    MONTH_EXTRA.iter().find(|(name, _)| name.starts_with(&s)).map(|(_, m)| *m)
 }
 
 pub fn days_in_month(year: Option<i32>, month: u32) -> u32 {
@@ -241,7 +439,8 @@ fn parse_part(s: &str) -> Result<Part, String> {
             if let Some(m) = month_from_name(t) {
                 month = Some(m);
             } else if let Some(n) = num(t.trim_end_matches(['.', 'h', 't', 's', 'n', 'd', 'r'])) {
-                if t.len() >= 3 || day.is_some() || n > 31 {
+                let digits = t.trim_end_matches(['.', 'h', 't', 's', 'n', 'd', 'r']);
+                if digits.len() >= 3 || day.is_some() || n > 31 {
                     year = Some(n as i32);
                 } else {
                     day = Some(n);
@@ -291,6 +490,62 @@ mod tests {
         let span = Date::parse("from 1 Jan 1900 to 1910").unwrap();
         assert_eq!((span.descriptor.as_str(), span.day, span.end_year), ("Span", Some(1), Some(1910)));
         assert_eq!(Date::parse("(during the war)").unwrap().text, "during the war");
+    }
+
+    #[test]
+    fn parses_decades_as_ranges_and_shows_them_back() {
+        let d = Date::parse("1950s").unwrap();
+        assert_eq!((d.descriptor.as_str(), d.year, d.end_year), ("Range", Some(1950), Some(1959)));
+        assert_eq!(d.display(), "1950s");
+        assert_eq!(Date::parse("1950's").unwrap(), d);
+        assert_eq!(Date::parse("between 1950 and 1959").unwrap().display(), "1950s");
+        assert_eq!(Date::parse("between 1950 and 1960").unwrap().display(), "between 1950 and 1960");
+        assert!(Date::parse("1955s").is_err());
+    }
+
+    #[test]
+    fn parses_localized_month_names() {
+        let want = Date::ymd(1950, 3, 12);
+        for s in [
+            "12 märts 1950",
+            "12. maaliskuuta 1950",
+            "12 März 1950",
+            "12 mars 1950",
+            "12 marzo 1950",
+            "12 Mär 1950",
+            "12 mrz 1950",
+            "12 maalis 1950",
+        ] {
+            assert_eq!(Date::parse(s).unwrap(), want, "{s}");
+        }
+        assert_eq!(Date::parse("1 detsember 1901").unwrap(), Date::ymd(1901, 12, 1));
+        assert_eq!(Date::parse("3 août 1914").unwrap(), Date::ymd(1914, 8, 3));
+        let month = |s: &str| Date::parse(s).unwrap().month;
+        assert_eq!(month("5 septiembre 1914"), Some(9));
+        assert_eq!(month("5 sept 1914"), Some(9));
+        assert_eq!(month("5 kesäkuuta 1914"), Some(6));
+        assert_eq!(month("5 marraskuu 1914"), Some(11));
+        assert_eq!(month("5 juuli 1914"), Some(7));
+        assert_eq!(month("5 okt 1914"), Some(10));
+        assert_eq!(month("5 dez 1914"), Some(12));
+        assert_eq!(month("5 enero 1914"), Some(1));
+        assert_eq!(month("5 januari 1914"), Some(1));
+        assert_eq!(month("abt 5 veebr 1914"), Some(2));
+        assert_eq!(month("5 maj 1914"), Some(5));
+        assert_eq!(month("5 février 1914"), Some(2));
+        assert!(Date::parse("5 blorp 1914").is_err());
+    }
+
+    #[test]
+    fn ambiguous_numeric_dates_get_a_hint() {
+        assert_eq!(
+            Date::ambiguity_hint("3/12/1950").as_deref(),
+            Some("3 Dec 1950 (day/month); for 12 Mar type 12 Mar 1950")
+        );
+        assert_eq!(Date::ambiguity_hint("13/12/1950"), None);
+        assert_eq!(Date::ambiguity_hint("5/5/1950"), None);
+        assert_eq!(Date::ambiguity_hint("12.03.1950"), None);
+        assert_eq!(Date::ambiguity_hint("1950"), None);
     }
 
     #[test]
