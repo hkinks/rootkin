@@ -10,6 +10,7 @@ mod dates;
 mod families;
 pub mod gedcom;
 pub mod gramps;
+mod report;
 mod vocab;
 
 use std::collections::HashMap;
@@ -17,6 +18,9 @@ use std::path::Path;
 
 use familyx::model::Tree;
 use familyx::Package;
+
+pub use report::ReportGroup;
+pub(crate) use report::{Dropped, Findings};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -85,7 +89,19 @@ impl Format {
 pub struct ImportReport {
     pub people: usize,
     pub families: usize,
-    /// Human-readable notes on dropped or approximated data.
+    pub sources: usize,
+    pub photos: usize,
+    /// Everything that was left out or worked around, grouped and explained
+    /// in plain words.
+    pub left_out: Vec<ReportGroup>,
+    /// Pairs of people with the same name and a birth year within 2 years.
+    pub duplicates: Vec<String>,
+    /// Links to records that are not in the file, one line each.
+    pub broken_links: Vec<String>,
+    /// The tree's name when the file gives one (Ancestry's `_TREE`).
+    pub tree_name: Option<String>,
+    /// The technical details: every raw note and dropped item, for support
+    /// and "Copy details".
     pub warnings: Vec<String>,
 }
 
@@ -272,24 +288,4 @@ pub fn export_path_as(pkg: &Package, path: impl AsRef<Path>, format: Format) -> 
     }
     std::fs::write(path, bytes)?;
     Ok(())
-}
-
-/// Counts dropped items by a path like `INDI.SOUR`, reported once at the end.
-#[derive(Default)]
-pub(crate) struct Dropped(std::collections::BTreeMap<String, usize>);
-
-impl Dropped {
-    pub(crate) fn add(&mut self, what: impl Into<String>) {
-        self.add_n(what, 1);
-    }
-
-    pub(crate) fn add_n(&mut self, what: impl Into<String>, n: usize) {
-        *self.0.entry(what.into()).or_default() += n;
-    }
-
-    pub(crate) fn into_warnings(self, warnings: &mut Vec<String>) {
-        for (what, n) in self.0 {
-            warnings.push(format!("dropped {n}x {what}"));
-        }
-    }
 }

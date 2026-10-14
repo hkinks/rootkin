@@ -16,7 +16,7 @@ use familyx::Package;
 use crate::dates::{self, DateValue, Kind};
 use crate::families::{self, Fam};
 use crate::vocab::{self, GRAMPS_TYPES};
-use crate::{Dropped, Error, ImportReport, Result};
+use crate::{Dropped, Error, Findings, ImportReport, Result};
 
 const NS: &str = "http://gramps-project.org/xml/1.7.1/";
 
@@ -529,8 +529,8 @@ pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportR
     for problem in edit::check(&imp.pkg.doc) {
         imp.warnings.push(format!("inconsistency after import: {problem}"));
     }
-    imp.dropped.into_warnings(&mut imp.warnings);
-    report.warnings = imp.warnings;
+    let findings = Findings { dropped: imp.dropped, warnings: imp.warnings, ..Default::default() };
+    let report = crate::report::finish(&imp.pkg, report, findings);
     Ok((imp.pkg, report))
 }
 

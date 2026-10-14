@@ -19,7 +19,7 @@ const UNDO_LIMIT: usize = 100;
 enum Job {
     Opened(PathBuf, Result<Package, String>),
     /// A converted genealogy file and a summary of what came in.
-    Imported(PathBuf, Result<(Package, crate::formats::Summary), String>),
+    Imported(PathBuf, Result<(Package, crate::formats::ImportReport), String>),
     Saved(PathBuf, u64, Result<(), String>),
 }
 
@@ -65,7 +65,7 @@ pub struct App {
     notice: Option<String>,
     show_about: bool,
     /// File name and result of the last import, shown until dismissed.
-    import_summary: Option<(String, crate::formats::Summary)>,
+    import_summary: Option<(String, crate::formats::ImportReport)>,
     pub(crate) sources_ui: crate::sources::SourcesUi,
 }
 
@@ -849,21 +849,16 @@ impl App {
             });
         }
 
-        if let Some((file, summary)) = &self.import_summary {
+        if let Some((file, report)) = &self.import_summary {
             let mut choice = None;
+            let mut save_report = false;
             egui::Modal::new(egui::Id::new("import_summary")).show(ctx, |ui| {
-                ui.set_max_width(520.0);
+                ui.set_max_width(560.0);
                 ui.heading(format!("Imported {file}"));
-                ui.label(format!("{} came in. It is open as a new tree that is not saved yet.", summary.headline()));
-                if !summary.notes.is_empty() {
-                    ui.add_space(6.0);
-                    ui.label(format!("{} things could not be brought over exactly:", summary.notes.len()));
-                    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                        for note in &summary.notes {
-                            ui.label(format!("- {note}"));
-                        }
-                    });
-                }
+                ui.label(format!("{} came in. It is open as a new tree that is not saved yet.", report.headline()));
+                egui::ScrollArea::vertical().max_height(340.0).auto_shrink([true, true]).show(ui, |ui| {
+                    import_report_sections(ui, report);
+                });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new("Save as .familyx…").strong()).clicked() {
@@ -873,10 +868,16 @@ impl App {
                         choice = Some(false);
                     }
                     if ui.button("Copy details").clicked() {
-                        ui.ctx().copy_text(summary.details(file));
+                        ui.ctx().copy_text(report.to_text(file));
+                    }
+                    if ui.button("Save report…").clicked() {
+                        save_report = true;
                     }
                 });
             });
+            if save_report {
+                self.save_import_report();
+            }
             if let Some(save) = choice {
                 self.import_summary = None;
                 if save {
@@ -920,6 +921,23 @@ impl App {
 
     pub(crate) fn request_import(&mut self, path: PathBuf) {
         self.guarded(Pending::Import(path));
+    }
+
+    /// Write the import report of the summary dialog to a text file.
+    fn save_import_report(&mut self) {
+        let Some((file, report)) = &self.import_summary else { return };
+        let stem = file.rsplit_once('.').map_or(file.as_str(), |(stem, _)| stem);
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Text file", &["txt"])
+            .set_file_name(format!("{stem}-import-report.txt"))
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, report.to_text(file)) {
+            Ok(()) => self.toasts.info(format!("Saved the report as {}", file_name(&path))),
+            Err(e) => self.toasts.error(format!("Could not save the report: {e}")),
+        }
     }
 
     /// Converting a big file takes a while; do it off the UI thread.
@@ -1066,5 +1084,42 @@ impl eframe::App for App {
         if self.toasts.show(&ctx, central) {
             self.undo(false);
         }
+    }
+}
+
+/// The groups of an import report: what was left out, what to check and the
+/// technical details.
+fn import_report_sections(ui: &mut egui::Ui, report: &crate::formats::ImportReport) {
+    if !report.left_out.is_empty() {
+        ui.add_space(6.0);
+        ui.strong("Left out or changed");
+        for g in &report.left_out {
+            ui.add_space(4.0);
+            ui.label(RichText::new(format!("{} ({})", g.title, g.count)).strong());
+            ui.label(RichText::new(&g.explanation).weak());
+        }
+    }
+    if !report.duplicates.is_empty() || !report.broken_links.is_empty() {
+        ui.add_space(8.0);
+        ui.strong("Worth a look");
+        let list = |ui: &mut egui::Ui, title: &str, items: &[String]| {
+            if !items.is_empty() {
+                egui::CollapsingHeader::new(format!("{title}: {}", items.len())).id_salt(title).show(ui, |ui| {
+                    for item in items {
+                        ui.label(format!("- {item}"));
+                    }
+                });
+            }
+        };
+        list(ui, "Possible duplicate people", &report.duplicates);
+        list(ui, "Links to records that are not in the file", &report.broken_links);
+    }
+    if !report.warnings.is_empty() {
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new("Technical details").show(ui, |ui| {
+            for w in &report.warnings {
+                ui.label(RichText::new(w).monospace());
+            }
+        });
     }
 }

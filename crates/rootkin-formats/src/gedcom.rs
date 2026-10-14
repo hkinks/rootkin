@@ -15,7 +15,7 @@ use familyx::Package;
 use crate::dates::{self, DateValue};
 use crate::families::{self, Fam};
 use crate::vocab::{self, FAM_EVENTS, INDI_ATTRIBUTES, INDI_EVENTS};
-use crate::{Dropped, Error, ExportMedia, ImportReport, Resolve, Result};
+use crate::{Dropped, Error, ExportMedia, Findings, ImportReport, Resolve, Result};
 
 /// Longest value chunk per physical line (the limit is 255 including level and tag).
 const CHUNK: usize = 240;
@@ -471,6 +471,7 @@ struct Importer<'a> {
     objects: HashMap<String, String>,
     dropped: Dropped,
     warnings: Vec<String>,
+    broken_links: Vec<String>,
     notes: HashMap<String, String>,
     /// SOUR xref -> source id
     sources: HashMap<String, String>,
@@ -484,6 +485,8 @@ struct Importer<'a> {
     adopted: HashSet<(String, String)>,
     /// FAM xref -> children that name the family in a `FAMC`
     famc_children: HashMap<String, Vec<String>>,
+    /// (person, `FAMS` / `FAMC`, FAM xref) as written on each individual
+    family_refs: Vec<(String, &'static str, String)>,
 }
 
 pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)> {
@@ -499,6 +502,7 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
         objects: HashMap::new(),
         dropped: Dropped::default(),
         warnings,
+        broken_links: Vec::new(),
         notes: HashMap::new(),
         sources: HashMap::new(),
         inline_sources: HashMap::new(),
@@ -506,6 +510,7 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
         pedi: HashMap::new(),
         adopted: HashSet::new(),
         famc_children: HashMap::new(),
+        family_refs: Vec::new(),
     };
     for n in &roots {
         match (&n.xref, n.tag.as_str()) {
@@ -530,6 +535,13 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
         imp.fam(n);
         report.families += 1;
     }
+    let families: HashSet<&str> = roots.iter().filter(|n| n.tag == "FAM").filter_map(|n| n.xref.as_deref()).collect();
+    for (person, tag, fam) in std::mem::take(&mut imp.family_refs) {
+        if !families.contains(fam.as_str()) && !fam.eq_ignore_ascii_case("@VOID@") {
+            let role = if tag == "FAMS" { "a spouse" } else { "a child" };
+            imp.broken_links.push(format!("{person} is listed as {role} in family {fam}, which is not in the file"));
+        }
+    }
     for n in &roots {
         match n.tag.as_str() {
             "HEAD" | "TRLR" | "SUBM" | "SUBN" | "INDI" | "FAM" | "NOTE" | "SNOTE" | "OBJE" | "SOUR" | "REPO" => {}
@@ -544,8 +556,13 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
     for problem in edit::check(&imp.pkg.doc) {
         imp.warnings.push(format!("inconsistency after import: {problem}"));
     }
-    imp.dropped.into_warnings(&mut imp.warnings);
-    report.warnings = imp.warnings;
+    let tree_name = roots
+        .first()
+        .and_then(|head| head.child("_TREE"))
+        .and_then(|t| t.child_value("NAME").or(Some(t.value.trim()).filter(|v| !v.is_empty())))
+        .map(str::to_string);
+    let findings = Findings { dropped: imp.dropped, warnings: imp.warnings, broken_links: imp.broken_links, tree_name };
+    let report = crate::report::finish(&imp.pkg, report, findings);
     Ok((imp.pkg, report))
 }
 
@@ -666,7 +683,7 @@ impl Importer<'_> {
             match self.sources.get(ptr) {
                 Some(id) => id.clone(),
                 None => {
-                    self.warnings.push(format!("{path} points to missing source {ptr}"));
+                    self.broken_links.push(format!("A source note ({path}) points to {ptr}, which is not in the file"));
                     return Ok(());
                 }
             }
@@ -711,6 +728,10 @@ impl Importer<'_> {
         if let Some(x) = &n.xref {
             self.people.insert(x.clone(), id.clone());
         }
+        let label = match format!("{given} {surname}").trim() {
+            "" => n.xref.clone().unwrap_or_else(|| "A person".into()),
+            name => name.to_string(),
+        };
         // `_MARNM`: the married surname, with the same given names
         let mut married_names: Vec<(String, String)> = married.map(|m| (given.clone(), m)).into_iter().collect();
         for alt in names.iter().skip(1) {
@@ -764,7 +785,10 @@ impl Importer<'_> {
                     }
                     None => self.dropped.add("INDI.OBJE without a file"),
                 }
+            } else if tag == "FAMS" {
+                self.family_refs.push((label.clone(), "FAMS", c.value.trim().to_string()));
             } else if tag == "FAMC" {
+                self.family_refs.push((label.clone(), "FAMC", c.value.trim().to_string()));
                 if let Some(xref) = &n.xref {
                     let fam = c.value.trim().to_string();
                     if let Some(p) = c.child_value("PEDI") {
@@ -819,7 +843,8 @@ impl Importer<'_> {
         }
         let id = self.people.get(ptr).cloned();
         if id.is_none() {
-            self.warnings.push(format!("FAM {fam}: {tag} points to missing individual {ptr}"));
+            let role = if tag == "HUSB" { "husband" } else { "wife" };
+            self.broken_links.push(format!("Family {fam} lists {ptr} as {role}, who is not in the file"));
         }
         id
     }
@@ -872,7 +897,7 @@ impl Importer<'_> {
                 continue;
             }
             let Some(child) = self.people.get(&child_x).cloned() else {
-                self.warnings.push(format!("FAM {label}: CHIL points to missing individual {child_x}"));
+                self.broken_links.push(format!("Family {label} lists {child_x} as a child, who is not in the file"));
                 continue;
             };
             let key = (label.clone(), child_x.clone());

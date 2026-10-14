@@ -9,8 +9,8 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 - [x] C2 Import on a background thread with progress; fix the import slowdown (20,000 people: 347 s)
 - [x] C3 Decode ANSEL GEDCOM (names are corrupted today)
 - [x] H1 Import `.gdz` and `.zip` containing `.ged` / `.gramps`
-- [ ] H2 Import summary dialog in plain language (dialog and "Copy details" done; plain-language grouping and "Save report" open)
-- [ ] H3 Keep married names, GEDCOM 7 shared notes, date phrases, `EVEN`+`TYPE`, photo URLs
+- [x] H2 Import summary dialog in plain language (grouped report, duplicates, broken links, "Copy details" and "Save report")
+- [x] H3 Keep married names, GEDCOM 7 shared notes, date phrases, `EVEN`+`TYPE`, photo URLs, Ancestry "Living" placeholders (M4)
 - [ ] H4 Import into the current tree; find and merge duplicates
 - [x] H5 Second parent becomes the first parent's partner
 - [x] H6 "Add child" focuses Given names; Enter needs a given name

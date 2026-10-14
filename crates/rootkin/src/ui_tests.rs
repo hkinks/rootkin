@@ -190,10 +190,45 @@ fn import_asks_before_replacing_unsaved_changes() {
     wait_for_jobs(&mut h);
     assert_eq!(h.state().tree.people.len(), 1);
     h.run_steps(2);
-    h.get_by_label_contains("1 person and 0 families came in");
+    h.get_by_label_contains("1 person, 0 families, 0 sources, 0 photos came in");
     h.get_by_label("Look around first").click();
     h.run_steps(2);
     assert!(h.query_by_label("Look around first").is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+const MESSY_GED: &str = concat!(
+    "0 HEAD\n1 CHAR UTF-8\n",
+    "0 @I1@ INDI\n1 NAME Ott /Ilves/\n1 BIRT\n2 DATE 1850\n2 SOUR Parish\n3 _APID 1,2::3\n",
+    "0 @I2@ INDI\n1 NAME Ott /Ilves/\n1 BIRT\n2 DATE 1851\n",
+    "0 @F1@ FAM\n1 HUSB @I1@\n1 CHIL @I404@\n0 TRLR\n"
+);
+
+#[test]
+fn import_summary_explains_what_was_left_out_in_plain_words() {
+    let path = std::env::temp_dir().join(format!("rootkin-test-{}-messy.ged", std::process::id()));
+    std::fs::write(&path, MESSY_GED).unwrap();
+    let mut h = harness();
+    h.state_mut().request_import(path.clone());
+    h.run_steps(3);
+    // a tree opened from the example counts as unsaved work
+    if let Some(button) = h.query_by_label("Don't save") {
+        button.click();
+    }
+    wait_for_jobs(&mut h);
+    h.run_steps(3);
+    h.get_by_label_contains("2 people, 1 family, 1 source, 0 photos came in");
+    h.get_by_label("Ancestry record links (1)");
+    h.get_by_label_contains("only work on ancestry.com");
+    h.get_by_label_contains("Possible duplicate people: 1");
+    h.get_by_label_contains("Links to records that are not in the file: 1");
+    h.get_by_label("Save report…");
+    h.get_by_label("Copy details");
+    // the raw lines are behind "Technical details"
+    assert!(h.query_by_label_contains("INDI.BIRT.SOUR._APID").is_none());
+    h.get_by_label("Technical details").click();
+    h.run_steps(3);
+    h.get_by_label_contains("dropped 1x INDI.BIRT.SOUR._APID");
     let _ = std::fs::remove_file(path);
 }
 
