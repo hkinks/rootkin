@@ -597,18 +597,164 @@ fn unversioned_trees_are_recognised_by_their_old_members() {
     assert!(inline(plain).migration().is_none());
 }
 
+// ---- database-backed stories (`stories7`, a LiteDB file; fixtures made by `make_stories7.cs` with LiteDB 4.1.4)
+
+fn stories_db(name: &str) -> Vec<u8> {
+    std::fs::read(format!("{DATA}/{name}")).unwrap()
+}
+
+/// `legacy_stories.xml` (version 8.0) in a `family4` package with the story database as part `stories7`.
+fn stories_package(xml: &str, db: &[u8]) -> Vec<u8> {
+    let blob = codec::encode_part(format!("\u{feff}{xml}").as_bytes(), codec::SourceFormat::Family4);
+    let types = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+                 <Override PartName=\"/family4\" ContentType=\"application/vnd.chronoplexsoftware.familyx\" />\
+                 <Override PartName=\"/stories7\" ContentType=\"application/octet-stream\" /></Types>";
+    let rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
+                <Relationship Type=\"MyFamilyTree/Relationship\" Target=\"/family4\" Id=\"R1\" />\
+                <Relationship Type=\"MyFamilyTree/Stories\" Target=\"/stories7\" Id=\"R2\" /></Relationships>";
+    zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", rels.as_bytes()),
+        ("family4", &blob),
+        ("stories7", db),
+    ])
+}
+
+fn note_texts(pkg: &Package, name: &str) -> Vec<(String, String)> {
+    let tree = Tree::from_doc(&pkg.doc);
+    named(&tree, name).notes.iter().map(|n| (n.format.clone(), n.text.clone())).collect()
+}
+
 #[test]
-fn database_backed_stories_are_kept_and_flagged() {
-    // The text of such a story lives in the app's encrypted story database, which cannot be read here.
+fn database_backed_stories_become_story_notes() {
+    let xml = std::fs::read_to_string(format!("{DATA}/legacy_stories.xml")).unwrap();
+    let pkg = Package::from_bytes(&stories_package(&xml, &stories_db("stories7"))).unwrap();
+    let report = pkg.migration().unwrap();
+    assert_eq!(report.notes, 3, "the empty story makes no note: {:?}", report.warnings);
+    assert_eq!(report.consumed_parts, ["stories7"]);
+    // the annotations are not converted, which is said
+    assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+    assert!(report.warnings[0].contains("annotations"), "{:?}", report.warnings);
+    assert!(!pkg.has_legacy_schema());
+    assert!(pkg.part("stories7").is_none() && pkg.part_names().all(|n| n != "stories7"));
+    assert!(edit::check(&pkg.doc).is_empty());
+
+    // same note as the file-based path makes: text/richtext, IsStoryNote
+    let ada = note_texts(&pkg, "Ada Whitcombe");
+    assert_eq!(ada.len(), 1);
+    assert_eq!(ada[0].0, "text/richtext");
+    assert!(ada[0].1.starts_with("{\\rtf1") && ada[0].1.contains("Ada grew up at the rectory in Dunmow."));
+    let ada_id =
+        Tree::from_doc(&pkg.doc).people.iter().find(|p| p.display_name() == "Ada Whitcombe").unwrap().id.clone();
+    assert_eq!(person_el(&pkg.doc, &ada_id).path("Notes/Notes/Note/IsStoryNote").unwrap().text(), "true");
+    assert!(person_el(&pkg.doc, &ada_id).child("Story").is_none());
+
+    // non-ASCII text survives byte for byte, plain text is kept as it is
+    let william = note_texts(&pkg, "William Whitcombe");
+    assert_eq!(
+        william[0].1,
+        "William was a surveyor.\r\nUnicode: \u{c5}se, K\u{f6}ping, \u{6c34}\u{8eca}, na\u{ef}ve caf\u{e9} \u{2615}, \u{1d11e}.\r\nPlain text kept as is."
+    );
+
+    // a story of two chunks (more than 255 KiB) is joined
+    let anne = note_texts(&pkg, "Anne Whitcombe");
+    assert!(anne[0].1.len() > 255 * 1024, "{}", anne[0].1.len());
+    assert!(anne[0].1.starts_with("{\\rtf1") && anne[0].1.ends_with("\\par}"));
+    assert!(anne[0].1.contains("Paragraph 2599: \u{c5}se walked to K\u{f6}ping"));
+
+    // an empty file is skipped like the app does
+    assert!(note_texts(&pkg, "Hugh Parry").is_empty());
+
+    // saved packages carry neither the database nor its metadata, and are stable
+    let saved = pkg.to_bytes().unwrap();
+    let mut zip = zip::ZipArchive::new(Cursor::new(saved.as_slice())).unwrap();
+    assert!((0..zip.len()).all(|i| !zip.by_index(i).unwrap().name().contains("stories7")));
+    let mut types = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("[Content_Types].xml").unwrap(), &mut types).unwrap();
+    assert!(!types.contains("stories7"), "{types}");
+    let mut rels = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("_rels/.rels").unwrap(), &mut rels).unwrap();
+    assert!(!rels.contains("stories7") && rels.contains("/family8"), "{rels}");
+    let reopened = assert_save_roundtrip(&pkg);
+    assert!(!reopened.has_legacy_schema());
+    assert_eq!(note_texts(&reopened, "Anne Whitcombe"), note_texts(&pkg, "Anne Whitcombe"));
+}
+
+#[test]
+fn story_database_passwords_by_version_and_without_password() {
+    let story = |version: &str, id: &str| {
+        format!(
+            "<Family><PeopleCollection><Person Id=\"p\"><Name><Names>Hugh</Names><Surname>Parry</Surname>\
+             <IsPrimary>true</IsPrimary></Name><Story><FileId>{id}</FileId></Story></Person></PeopleCollection>\
+             <FileProperties><Version>{version}</Version></FileProperties></Family>"
+        )
+    };
+    for (version, db, id, text) in [
+        ("7.0", "stories7.a", "22222222-aaaa-4bbb-8ccc-000000000001", "Hugh stood godfather to Anne."),
+        ("7.5", "stories7.a", "22222222-aaaa-4bbb-8ccc-000000000001", "Hugh stood godfather to Anne."),
+        // the stored hash identifies the password, whatever the version says
+        ("12.0", "stories7.a", "22222222-aaaa-4bbb-8ccc-000000000001", "Hugh stood godfather to Anne."),
+        ("14.1", "stories7.plain", "33333333-aaaa-4bbb-8ccc-000000000001", "Unprotected database."),
+    ] {
+        let pkg = Package::from_bytes(&stories_package(&story(version, id), &stories_db(db))).unwrap();
+        assert!(!pkg.has_legacy_schema(), "{version} {db}: {:?}", pkg.migration().unwrap().warnings);
+        let notes = note_texts(&pkg, "Hugh Parry");
+        assert!(notes.len() == 1 && notes[0].1.contains(text), "{version} {db}: {notes:?}");
+    }
+}
+
+#[test]
+fn database_backed_stories_with_missing_ids_keep_the_database() {
+    // Ada's id is in the database, the second person's is not
+    let xml = "<Family><PeopleCollection>\
+        <Person Id=\"a\"><Name><Names>Ada</Names><Surname>W</Surname><IsPrimary>true</IsPrimary></Name>\
+        <Story><FileId>11111111-aaaa-4bbb-8ccc-000000000001</FileId></Story></Person>\
+        <Person Id=\"b\"><Name><Names>Bea</Names><Surname>W</Surname><IsPrimary>true</IsPrimary></Name>\
+        <Story><FileId>no-such-file</FileId><AnnotationsFileId>11111111-aaaa-4bbb-8ccc-000000000002</AnnotationsFileId>\
+        </Story></Person></PeopleCollection><FileProperties><Version>9.0</Version></FileProperties></Family>";
+    let pkg = Package::from_bytes(&stories_package(xml, &stories_db("stories7"))).unwrap();
+    let report = pkg.migration().unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("no-such-file") && w.contains("not in the story database")));
+    assert!(report.consumed_parts.is_empty());
+    assert!(pkg.part("stories7").is_some(), "the database stays while a story is unresolved");
+    assert!(pkg.has_legacy_schema());
+    assert_eq!(note_texts(&pkg, "Ada W").len(), 1);
+    let story = person_el(&pkg.doc, "b").child("Story").unwrap();
+    assert_eq!(story.child_text("FileId").as_deref(), Some("no-such-file"));
+    assert!(story.child("AnnotationsFileId").is_some());
+    let reopened = assert_save_roundtrip_keeping_legacy(&pkg);
+    assert!(reopened.part("stories7").is_some());
+}
+
+/// Like [`assert_save_roundtrip`], for trees that still carry old elements.
+fn assert_save_roundtrip_keeping_legacy(pkg: &Package) -> Package {
+    let reopened = Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap();
+    assert!(reopened.migration().is_none());
+    assert!(reopened.doc == pkg.doc);
+    assert!(reopened.has_legacy_schema());
+    reopened
+}
+
+#[test]
+fn unreadable_story_databases_keep_the_stories() {
     let xml = "<Family><PeopleCollection><Person Id=\"p\"><Story><FileId>f1</FileId>\
                <AnnotationsFileId>f2</AnnotationsFileId></Story></Person></PeopleCollection>\
                <FileProperties><Version>8.0</Version></FileProperties></Family>";
+    // no database part
     let pkg = inline(xml);
     let report = pkg.migration().unwrap();
-    assert!(report.warnings.iter().any(|w| w.contains("database-backed")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("stories7 is not in the package")), "{:?}", report.warnings);
     assert!(pkg.has_legacy_schema());
-    assert!(person_el(&pkg.doc, "p").child("Story").is_some());
-    assert_save_roundtrip(&pkg);
+    assert_eq!(person_el(&pkg.doc, "p").child("Story").unwrap().elements().count(), 2);
+    assert_save_roundtrip_keeping_legacy(&pkg);
+    // garbage instead of a database
+    let pkg = Package::from_bytes(&stories_package(xml, b"not a database")).unwrap();
+    assert!(pkg.migration().unwrap().warnings.iter().any(|w| w.contains("cannot be read")));
+    assert!(pkg.has_legacy_schema() && pkg.part("stories7").is_some());
+    // a truncated database
+    let db = stories_db("stories7");
+    let pkg = Package::from_bytes(&stories_package(xml, &db[..db.len() / 2])).unwrap();
+    assert!(pkg.has_legacy_schema(), "{:?}", pkg.migration().unwrap().warnings);
 }
 
 // ---- general

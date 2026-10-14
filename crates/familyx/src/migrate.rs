@@ -21,6 +21,7 @@ use crate::doc::{Document, Element, Node};
 use crate::edit::{self, record, text_el, FACT_DATE_ORDER, FACT_ORDER, FAMILY_ORDER, NAME_ORDER, PERSON_ORDER};
 
 mod facts;
+mod stories;
 
 /// Schema version written by the current app (`FileProperties/Version`).
 pub const CURRENT_VERSION: f64 = 14.8;
@@ -59,6 +60,8 @@ pub struct Report {
     pub warnings: Vec<String>,
     /// Old data that was dropped because the app drops it too (relations to people that do not exist, ...).
     pub dropped: Vec<String>,
+    /// Package parts that were absorbed into the tree (the story database); saving drops them.
+    pub consumed_parts: Vec<String>,
 }
 
 /// Obsolete members of a `Fact`.
@@ -68,7 +71,7 @@ const LEGACY_BIOLOGY: [&str; 6] =
     ["HairColor", "LeftEyeColor", "RightEyeColor", "BloodGroup", "HaplogroupY", "HaplogroupM"];
 
 /// True if the tree still contains elements of the old schema (anything [`migrate`] converts, or keeps
-/// because it cannot, like a database-backed `Story`).
+/// because it cannot, like a `Story` whose database is unreadable).
 pub fn has_legacy_elements(doc: &Document) -> bool {
     let legacy_fact = |facts: &Element| {
         facts.children_named("Fact").any(|f| f.elements().any(|e| LEGACY_FACT.contains(&e.name.as_str())))
@@ -431,6 +434,7 @@ fn migrate_people(
     report: &mut Report,
 ) {
     let Some(people) = doc.root.child_mut("PeopleCollection") else { return };
+    let mut stories = stories::StoryDb::new(parts, version);
     for person in people.elements_mut().filter(|p| p.name == "Person") {
         migrate_person_names(person, report);
         if let Some(facts) = person.child_mut("Facts") {
@@ -456,7 +460,10 @@ fn migrate_people(
             }
         }
         migrate_contact_address(person);
-        migrate_story(person, parts, report);
+        migrate_story(person, parts, &mut stories, report);
+    }
+    if stories.used && !stories.unresolved {
+        report.consumed_parts.push(stories::PART.to_string());
     }
 }
 
@@ -523,12 +530,25 @@ fn migrate_contact_address(person: &mut Element) {
     person.ensure_child("Facts", PERSON_ORDER).push(fact);
 }
 
-/// `Story` pointed at a file with the person's story; it becomes a story note.
-fn migrate_story(person: &mut Element, parts: &dyn Fn(&str) -> Option<Vec<u8>>, report: &mut Report) {
+/// A story file's bytes as text: UTF-8, a byte order mark is skipped (the app reads it with a `StreamReader`).
+fn story_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).trim_start_matches('\u{feff}').to_string()
+}
+
+/// `Story` pointed at a file with the person's story, held the text itself (`GedcomImportStoryText`) or
+/// named files in the story database part (`FileId`, `AnnotationsFileId`); it becomes a story note.
+fn migrate_story(
+    person: &mut Element,
+    parts: &dyn Fn(&str) -> Option<Vec<u8>>,
+    stories: &mut stories::StoryDb,
+    report: &mut Report,
+) {
+    use stories::Lookup;
     let Some(story) = person.child("Story") else { return };
     let person_id = person.attr("Id").unwrap_or_default().into_owned();
     let mut remaining = story.clone();
     let mut notes = Vec::new();
+    let mut warned = false;
     if let Some(text) = nonblank(take_text(&mut remaining, "GedcomImportStoryText")) {
         notes.push((text, "text/plain".to_string()));
     }
@@ -537,13 +557,57 @@ fn migrate_story(person: &mut Element, parts: &dyn Fn(&str) -> Option<Vec<u8>>, 
         match found {
             Some(bytes) => {
                 // The app reads every story file as rich text, whatever its name.
-                let text = String::from_utf8_lossy(&bytes).trim_start_matches('\u{feff}').to_string();
-                notes.push((text, "text/richtext".to_string()));
+                notes.push((story_text(&bytes), "text/richtext".to_string()));
             }
             None => {
                 report.warnings.push(format!("story file {path} of {person_id} is not in the package"));
                 remaining.children.push(Node::Element(text_el("RelativePath", &path)));
+                warned = true;
             }
+        }
+    }
+    let mut story_resolved = true;
+    if let Some(file_id) = nonblank(take_text(&mut remaining, "FileId")) {
+        match stories.read(&file_id) {
+            // The app skips empty files (it only looks at files with content): no note, nothing lost.
+            Lookup::Found(bytes) => {
+                if !bytes.is_empty() {
+                    notes.push((story_text(&bytes), "text/richtext".to_string()));
+                }
+            }
+            Lookup::Missing => {
+                report.warnings.push(format!("story {file_id} of {person_id} is not in the story database"));
+                story_resolved = false;
+            }
+            Lookup::Unavailable(why) => {
+                report.warnings.push(format!("story {file_id} of {person_id} was not read: {why}"));
+                story_resolved = false;
+            }
+        }
+        if !story_resolved {
+            remaining.children.push(Node::Element(text_el("FileId", &file_id)));
+            stories.unresolved = true;
+            warned = true;
+        }
+    }
+    if let Some(file_id) = nonblank(take_text(&mut remaining, "AnnotationsFileId")) {
+        // Annotations are WPF sticky notes (XAML) on the story text; they are not converted.
+        let keep = !story_resolved
+            || match stories.read(&file_id) {
+                Lookup::Found(bytes) => {
+                    if !bytes.is_empty() {
+                        report
+                            .warnings
+                            .push(format!("annotations of the story of {person_id} are not converted (dropped)"));
+                    }
+                    false
+                }
+                Lookup::Missing => false,
+                Lookup::Unavailable(_) => true,
+            };
+        if keep {
+            remaining.children.push(Node::Element(text_el("AnnotationsFileId", &file_id)));
+            stories.unresolved = true;
         }
     }
     for (text, format) in notes {
@@ -552,7 +616,9 @@ fn migrate_story(person: &mut Element, parts: &dyn Fn(&str) -> Option<Vec<u8>>, 
     }
     let leftover = remaining.elements().any(|e| !e.text().trim().is_empty());
     if leftover {
-        report.warnings.push(format!("story of {person_id} kept as is (database-backed or file missing)"));
+        if !warned {
+            report.warnings.push(format!("story of {person_id} kept as is (unknown content)"));
+        }
         if let Some(slot) = person.child_mut("Story") {
             *slot = remaining;
         }

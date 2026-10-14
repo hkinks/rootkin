@@ -6,7 +6,7 @@ See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities
 
 1. Verify in the Windows app that Linux-saved files open (see "Verify")
 2. Launch: Flathub/AUR packaging, announcements (plan kept locally, not in git)
-3. Older-format leftovers: database-backed stories; everything else is converted but should be confirmed with real old files
+3. Older formats: everything is converted but should be confirmed with real old files (database stories: private LiteDB build; story annotations are not converted)
 
 ## Publishing
 
@@ -83,9 +83,11 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
       "Schema migration"). Derived from the decompiled conversion code and checked by running the app's own
       conversion chain on small synthetic inputs (reflection harness, not in the repo); crest and story files only
       by reading the code. Confirmation with real old files is still desirable.
-- [ ] Older formats: database-backed stories (`Story/FileId`, versions 7.0-14.1): the text is in the app's encrypted
-      LiteDB file (`stories7`, private `LiteDB4` build); the `Story` element is kept and `has_legacy_schema()` stays
-      true. Needs a real sample to implement.
+- [x] Older formats: database-backed stories (`Story/FileId`, versions 7.0-14.1): the app's LiteDB file (`stories7`,
+      password by version) is read by `crate::litedb` and becomes story notes; the part is dropped on save.
+      Checked against files from the real LiteDB 4.1.4 and the app's own conversion (with 4.1.4 behind the
+      private `LiteDB4` name). Open: no real database seen (the private build's `EncryptionVersion` is unknown),
+      story annotations (WPF sticky notes) are dropped with a warning
 - [x] "New family tree" in the UI (library: `Package::new` done)
 - [x] Understand `FamilyId` attribute: password hash record, UI lock only; new files now get the default-password hash (docs/design.md)
 - [x] Update `FileProperties/LastSavedDate` and `FamilyProperties/LastSavedPersonId` on save

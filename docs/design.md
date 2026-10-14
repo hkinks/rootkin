@@ -82,8 +82,9 @@ assembly's own decryptor. The conversion chain itself can be run on Linux with a
 old-schema XML with the app's `XmlSerializer`, call the (private) conversion methods in the order the entry
 point runs them, serialize the result. That differential run was done for every conversion listed below as
 "checked"; the result is what the tests in `tests/migrate.rs` assert. Not runnable: anything that needs the
-app's data folders or WPF imaging (family crest, story *files*, photos) and the story database step (the
-`LiteDB4` library is not shipped). Those parts are *verified only by reading the code*, as marked. The fixtures
+app's data folders or WPF imaging (family crest, story *files*, photos). The story database step runs with
+the real LiteDB 4.1.4 standing in for the private `LiteDB4` (see "Story"). Those parts are *verified only by
+reading the code*, as marked. The fixtures
 (`tests/data/old/legacy_rel.xml`, `legacy_old.xml`, fictional) are hand-written; they mix constructs of several
 schema versions to cover the cases, which the app's own chain would not do (it only sees what its version could
 contain), so they are not a differential test of the whole chain. Real old files would still confirm all of it.
@@ -95,7 +96,7 @@ Old layout (all per `Person` unless noted):
 | `Relationships/Relationship xsi:type=Spouse\|Child\|Parent\|SiblingRelationship` | per-person, mirrored list. `PersonId` = the relative, `RelationshipType`; `Child` = "PersonId is my child", `Parent` = "PersonId is my parent". Spouse: `SpouseRelationshipStatus` (or old `SpouseModifier`), `Marriage`, `Divorce` (`Fact`), `Facts`, `LDSFacts`, `NumberOfChildren`, `Notes`, `Multimedia`; Child/Parent: `ParentChildModifier` (string) |
 | `Name`, `AlternativeName` | one `Name` each instead of `PersonNameCollection/Names`; a single `Citation` on a name |
 | `Photos`, `Attachments`, `AudioVideo` (and root `PhotoCollection`, `AttachmentCollection`, `AudioVideoCollection`, `PackagedFilePropertiesCollection`) | files with `RelativePath`, `IsAvatar`; properties by file id |
-| `Story` | `RelativePath` of a story file, `GedcomImportStoryText`, or database ids (`FileId`, `AnnotationsFileId`) |
+| `Story` | `RelativePath` of a story file, `GedcomImportStoryText`, or story database ids (`FileId`, `AnnotationsFileId`) |
 | `ContactAddress` | `Address` with `ContactName/Line1-3/City/State/PostalCode/Country` |
 | `LDSFacts` | `Fact` subclasses (`xsi:type` LDSBaptismFact, LDSEndowmentFact, LDSChildSealingFact, LDSSpouseSealingFact) with `TempleCode` and a per-type `...DateStatus` |
 | `Biology`: `HairColor`, `LeftEyeColor`, `RightEyeColor`, `BloodGroup`, `HaplogroupY`, `HaplogroupM` | strings |
@@ -137,9 +138,36 @@ Mapping (what `migrate` does; version gate of the app's conversion in brackets):
   separate tree (people connected by couple or parent links): `FamilyCrestId` and `Multimedia`.
 - **Story**: `GedcomImportStoryText` becomes a plain story note, a story file found in the package a
   `text/richtext` story note (the app reads every story file as rich text; its `... - annotations.xml` is not
-  converted). Both have `IsStoryNote` true. **Database-backed stories (`FileId`) are not converted**: the text
-  lives in the app's encrypted LiteDB file (`stories7`; the library `LiteDB4` is a private build and not
-  available), so the `Story` element stays and `Report::warnings` says so. (Reading the code only.)
+  converted). Both have `IsStoryNote` true. (Reading the code only.)
+  **Database-backed stories** [`Story/FileId`, `AnnotationsFileId`; versions 7.0 to < 14.2] (the conversion step
+  `_0092_0087_0087`, and the string literals via the vendor's decryptor): the texts are in a LiteDB v4
+  `FileStorage` database, the package part `stories7` (the app extracts the package to a folder and opens the
+  file `<folder>/stories7`; the part name is the literal `stories7`). `crate::litedb` reads it (see below) and
+  `crate::migrate::stories` maps it:
+  - the connection string is `Filename=<file>; Password=<p>; EncryptionVersion=<n>`; `(p, n)` depends on the
+    file `Version`: 7.0 -> (A, 1); 7.1 to 7.6 -> (A, 2); 7.7 and later -> (B, 2), with A
+    `5EuBD8Bfmx53Re9oyiEYvJO7AQF9dLLMbON2ZBMICzQeaRKAbUNE1JrUi22X518` and B
+    `gkBrhnC6uSzoU2KMOL4UeNfNpeIqSSRkEn0PliJJ5NJP3IJViZE9o1eAQw6dbQI` (checked by running the app's chain with
+    stock LiteDB 4.1.4 behind the `LiteDB4` name: the connection strings it builds, and a database made with A
+    is refused with B). Rootkin does not rely on the version: the header of the database stores `SHA1(password)`,
+    so the matching one of the two is used;
+  - `FileId` / `AnnotationsFileId` are compared with the `_id` of the `_files` records (strings, here GUIDs).
+    The app only looks at non-empty files, ordered by length descending and de-duplicated by `filename`
+    (so of several stories with the same file name only the longest would survive; Rootkin does not de-duplicate
+    by name, an id is an id). The file content is read as UTF-8 text into a `Note` with `Format` `text/richtext`
+    and `IsStoryNote` true, added to the person's notes like a story file; an empty file makes no note;
+  - the annotations file is a WPF annotation store (`XmlStreamStore`, base64 XAML per annotation) which the app
+    converts to further rich-text notes. **Not converted** here (no XAML reader): the annotations are dropped and
+    `Report::warnings` says so;
+  - cleanup: the app deletes the extracted `stories7` after converting. Rootkin drops the part (with its
+    content-type override and relationships, `Report::consumed_parts`) when every story id was resolved, so
+    `has_legacy_schema()` is false afterwards and saving writes no `stories7`. If an id is missing from the
+    database, or the database is absent / unreadable (wrong password, corrupt), the `Story` element keeps that
+    id, the part stays and a warning says why (`has_legacy_schema()` stays true).
+  Not verified: real databases of the app. The app's `LiteDB4` is a private build (its `FindAll` takes a flag, the
+  connection string has `EncryptionVersion`), which is not LiteDB 4.1.4 itself; what `EncryptionVersion` 1 / 2
+  change is unknown. `crate::litedb` implements the stock LiteDB 4.1.4 encryption (below); if the private build
+  derives its key differently, opening fails with a warning and the story stays as it was.
 - **Facts**: `Place` -> `PlaceDetails/Description` (the app does not convert this one: a `Place` string is lost
   there; it is kept here); `ContactAddress` -> a `FACT_ContactAddress` fact with the address lines
   (newline separated) as place (the app loses it: its line-joining step does not reach the contact address);
@@ -193,6 +221,22 @@ other obsolete members of address/repository/source/task/author records, per-fil
 `FlatNotes`, calendar month adjustments (French/Icelandic/Hebrew), `AncestralFileNumber`/`RecordFileNumber`/
 `CustomId`. Because `Version` is bumped, the Windows app will not
 convert these either once the file was saved by Rootkin. `FamilyId` is upgraded on import (below).
+
+## Story database (LiteDB v4 reader)
+
+`crate::litedb` is a small read-only reader of LiteDB v4 data files (data file version 7), written from the
+public LiteDB 4.1.x format (MIT). 4096-byte pages, page 0 (header) in the clear: 25-byte page header
+(`id u32`, `type u8`, `prev u32`, `next u32`, `items u16`, `free u16`, 8 reserved), then `"** This is a LiteDB file **"`,
+version 7, change id, free-list head, last page, user version, `SHA1(password)` (20, zeros if none), salt (16),
+the collection name -> page table. With a password every other page is AES-256-CBC without padding, key and IV
+`PBKDF2-HMAC-SHA1(UTF-8 password, salt, 1000 iterations)` (`key(32) | iv(16)`, the same IV for each page). A
+collection page names the primary-key index whose skip list (`IndexNode`s, level 0) leads to the documents (BSON
+in data blocks, or in a chain of extend pages for large ones). `FileStorage` is two collections: `_files`
+(`_id`, `filename`, `mimeType`, `length`, `chunks`, `uploadDate`, `metadata`) and `_chunks` (`_id` =
+`<file id>\<index, 5 digits>`, `data` binary, at most 255 KiB each). Verified against files written by the real
+LiteDB 4.1.4 (`tests/data/old/stories7*`, generated by `make_stories7.cs`): encrypted (both passwords) and
+unprotected, a story of two chunks. Not handled: journal areas, files other than version 7, other BSON types
+than the ones LiteDB writes.
 
 ## FamilyId (tree password record)
 

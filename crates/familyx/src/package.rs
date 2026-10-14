@@ -151,7 +151,7 @@ impl Package {
     }
 
     /// True if the tree still contains elements of the old schema that
-    /// [`migrate`](crate::migrate) could not convert (a database-backed `Story`
+    /// [`migrate`](crate::migrate) could not convert (a database-backed `Story` whose database is unreadable
     /// or a story file missing from the package). They are kept verbatim.
     pub fn has_legacy_schema(&self) -> bool {
         migrate::has_legacy_elements(&self.doc)
@@ -192,11 +192,40 @@ impl Package {
         // Old schema (per-person relationships, photos, ...) -> current schema.
         let part = |name: &str| entries.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, d)| d.clone());
         let migration = migrate::migrate(&mut doc, &part).map(Box::new);
+        let consumed = migration.as_ref().map(|m| m.consumed_parts.clone()).unwrap_or_default();
         let mut pkg = Package { doc, parts: entries, family_index, source, migration };
+        for name in &consumed {
+            pkg.drop_part(name)?;
+        }
         if source.part_name() != FAMILY_PART {
             pkg.retarget_tree_part(source.part_name())?;
         }
         Ok(pkg)
+    }
+
+    /// Remove a part (matched case-insensitively) that migration absorbed into the tree, with its
+    /// content-type override and relationships.
+    fn drop_part(&mut self, name: &str) -> Result<()> {
+        let Some(pos) = self.parts.iter().position(|(n, _)| n.eq_ignore_ascii_case(name)) else { return Ok(()) };
+        let (removed, _) = self.parts.remove(pos);
+        if pos < self.family_index {
+            self.family_index -= 1;
+        }
+        let target = format!("/{removed}");
+        for part in ["[Content_Types].xml", RELS_PART] {
+            if let Some((_, data)) = self.parts.iter_mut().find(|(n, _)| n == part) {
+                let mut doc = Document::parse(data)?;
+                let before = doc.root.children.len();
+                doc.root.remove_children_where(|e| {
+                    e.attr("PartName").as_deref() == Some(target.as_str())
+                        || e.attr("Target").as_deref() == Some(target.as_str())
+                });
+                if doc.root.children.len() != before {
+                    *data = doc.to_bytes();
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Point `[Content_Types].xml` and `_rels/.rels` at `family8` instead of `old`,

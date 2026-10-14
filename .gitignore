@@ -9,3 +9,4 @@
 !/crates/familyx/tests/data/old/plaintext.xml
 !/crates/familyx/tests/data/old/legacy_rel.xml
 !/crates/familyx/tests/data/old/legacy_old.xml
+!/crates/familyx/tests/data/old/legacy_stories.xml
