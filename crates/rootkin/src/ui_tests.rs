@@ -179,3 +179,32 @@ fn import_asks_before_replacing_unsaved_changes() {
     assert_eq!(h.state().tree.people.len(), 1);
     let _ = std::fs::remove_file(path);
 }
+
+/// Open "Add child" for the selected person (surname prefilled).
+fn open_add_child(h: &mut Harness<App>) {
+    let app = h.state_mut();
+    let anchor = app.selected.clone().unwrap();
+    app.relation_dialog =
+        Some(crate::relation_dialog::RelationDialog::new(crate::relation_dialog::Relation::Child, &anchor, &app.tree));
+    h.run_steps(4);
+}
+
+#[test]
+fn add_child_dialog_focuses_given_names_and_enter_adds() {
+    let mut h = harness();
+    let before = h.state().tree.people.len();
+    open_add_child(&mut h);
+    // the surname is prefilled, yet typing goes straight into "Given names"
+    h.get_by_label("Add child of Erik Lindqvist");
+    text_input(&h, "Lindqvist");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().tree.people.len(), before, "Enter with only a prefilled surname adds nobody");
+    h.event(egui::Event::Text("Anna".into()));
+    h.run_steps(3);
+    text_input(&h, "Anna");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().tree.people.len(), before + 1);
+    assert!(h.state().tree.people.iter().any(|p| p.display_name() == "Anna Lindqvist"));
+}

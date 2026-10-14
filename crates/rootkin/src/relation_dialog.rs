@@ -26,6 +26,8 @@ pub struct RelationDialog {
     gender: Gender,
     /// For a new child: the anchor's spouse who is the other parent.
     co_parent: Option<Id>,
+    /// Put the cursor in "Given names" on the first frame.
+    focus_given: bool,
 }
 
 impl RelationDialog {
@@ -39,6 +41,7 @@ impl RelationDialog {
             surname: String::new(),
             gender: Gender::Unknown,
             co_parent: None,
+            focus_given: true,
         }
     }
 
@@ -116,8 +119,17 @@ impl App {
                 egui::Grid::new("new_person").num_columns(2).show(ui, |ui| {
                     ui.label("Given names");
                     let r = ui.add(egui::TextEdit::singleline(&mut dlg.given).desired_width(240.0));
-                    if !r.has_focus() && dlg.given.is_empty() && dlg.surname.is_empty() {
+                    // Enter ends editing; keep the cursor here when it doesn't add anybody
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         r.request_focus();
+                    }
+                    // keep asking until it sticks: the first frames of a modal can't take focus yet
+                    if dlg.focus_given {
+                        if r.has_focus() {
+                            dlg.focus_given = false;
+                        } else {
+                            r.request_focus();
+                        }
                     }
                     ui.end_row();
                     ui.label("Surname");
@@ -163,7 +175,11 @@ impl App {
             };
             ui.horizontal(|ui| {
                 submit |= ui.add_enabled(ready, egui::Button::new("Add")).clicked();
-                submit |= ready && !dlg.use_existing && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // Enter needs a given name: the surname alone may just be prefilled
+                submit |= ready
+                    && !dlg.use_existing
+                    && !dlg.given.trim().is_empty()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 done |= ui.button("Cancel").clicked();
             });
         });
