@@ -37,6 +37,21 @@ const NAME_TYPES: &[&str] = &[
 /// The app's `ParentChildModifier` values; empty = biological.
 const PARENT_KINDS: &[(&str, &str)] =
     &[("", "Biological"), ("Adopted", "Adoptive"), ("Foster", "Foster"), ("Step", "Step"), ("Guardian", "Guardian")];
+/// The app's relationship types: the tag of the couple's marriage event.
+const RELATIONSHIP_TYPES: &[&str] = &[
+    "MARR",
+    "MARR_Civil",
+    "MARR_Religious",
+    "MARR_CommonLaw",
+    "MARR_OtherMarriage",
+    "MARR_Partnership",
+    "MARR_RegisteredPartnership",
+    "MARR_LivingTogether",
+    "MARR_LivingTogetherApart",
+    "MARR_NotMarried",
+    "MARR_Other",
+    "MARR_Unknown",
+];
 /// The app's `SpouseRelationshipStatus` values.
 const COUPLE_STATUS: &[(&str, &str)] = &[
     ("", "Not set"),
@@ -240,6 +255,8 @@ enum Action {
     AddCustomFact(String),
     AddCoupleFact(Id, &'static str),
     CoupleStatus(Id, String),
+    /// Couple, its marriage event (if any), the new relationship type.
+    RelationshipType(Id, Option<Id>, &'static str),
     ParentKind(Id, String),
     Cite(Id, Id),
     Uncite(Id),
@@ -730,6 +747,25 @@ impl App {
                         }
                     });
                 });
+                // married, partnership, living together, ...: the type of the couple's marriage event
+                let marriage = couple.facts.iter().find(|f| edit::is_marriage_tag(&f.tag));
+                ui.horizontal(|ui| {
+                    ui.label("Relationship");
+                    let current = marriage.map(|f| f.tag.as_str());
+                    let text = current.map_or("Not set", |t| if t == "MARR" { "Married" } else { fact_label(t) });
+                    egui::ComboBox::from_id_salt(("relationship", &couple.id)).selected_text(text).show_ui(ui, |ui| {
+                        for tag in RELATIONSHIP_TYPES {
+                            let label = if *tag == "MARR" { "Married" } else { fact_label(tag) };
+                            if ui.selectable_label(current == Some(*tag), label).clicked() && current != Some(*tag) {
+                                *action = Some(Action::RelationshipType(
+                                    couple.id.clone(),
+                                    marriage.map(|f| f.id.clone()),
+                                    tag,
+                                ));
+                            }
+                        }
+                    });
+                });
                 for fact in &couple.facts {
                     let Some(f) = form.fact(&fact.id) else { continue };
                     let (lost, delete) = fact_editor(ui, &fact.tag, fact.label(), f, tree, action);
@@ -845,6 +881,14 @@ impl App {
                 if self.apply("Remove name", |d| edit::remove_name(d, &pid, &id)).is_some() {
                     self.toasts.undoable("Removed a name");
                 }
+            }
+            Action::RelationshipType(_, Some(fact), tag) => {
+                self.apply("Change relationship", |d| edit::set_marriage_type(d, &fact, tag));
+            }
+            Action::RelationshipType(couple, None, tag) => {
+                self.apply("Change relationship", |d| {
+                    edit::add_couple_fact(d, &couple, tag, &FactInput::default()).map(|_| ())
+                });
             }
             Action::MoveChild(child, delta) => {
                 self.apply("Reorder children", |d| edit::move_child(d, &pid, &child, delta));

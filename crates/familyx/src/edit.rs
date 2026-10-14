@@ -471,6 +471,25 @@ pub fn add_couple_fact(doc: &mut Document, link_id: &str, tag: &str, input: &Fac
     Ok(id)
 }
 
+/// Whether `tag` is a marriage (`MARR`) or one of the app's relationship types (`MARR_Civil`, ...).
+pub fn is_marriage_tag(tag: &str) -> bool {
+    tag == "MARR" || tag.starts_with("MARR_")
+}
+
+/// Change the type of a couple's marriage event, e.g. `MARR` to `MARR_Partnership`
+/// (the app keeps the relationship type in the tag). Date, place and the rest stay.
+pub fn set_marriage_type(doc: &mut Document, fact_id: &str, tag: &str) -> EditResult<()> {
+    if !is_marriage_tag(tag) {
+        return Err(EditError::Invalid("not a relationship type"));
+    }
+    let fact = fact_mut(doc, fact_id)?;
+    if !fact.child_text("Tag").is_some_and(|t| is_marriage_tag(&t)) {
+        return Err(EditError::Invalid("not a marriage event"));
+    }
+    fact.ensure_child("Tag", FACT_ORDER).set_text(tag);
+    Ok(())
+}
+
 pub fn update_fact(doc: &mut Document, fact_id: &str, input: &FactInput) -> EditResult<()> {
     write_fact_fields(fact_mut(doc, fact_id)?, input);
     Ok(())

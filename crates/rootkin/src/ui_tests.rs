@@ -698,3 +698,27 @@ fn adding_another_name_shows_a_row_to_fill_in() {
     // the new row's type menu is there to pick e.g. Maiden
     h.get_all_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some("type")).next().expect("type menu");
 }
+
+#[test]
+fn a_couple_can_be_marked_as_married_or_partners() {
+    let mut h = harness();
+    let erik = h.state().selected.clone().unwrap();
+    let couple = |h: &Harness<App>| {
+        h.state().tree.spouse_links_of(&erik)[0].facts.iter().map(|f| f.tag.clone()).collect::<Vec<_>>()
+    };
+    let combo = |h: &Harness<App>, text: &str| {
+        h.get_all_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some(text)).next().is_some()
+    };
+    let start = if couple(&h).iter().any(|t| familyx::edit::is_marriage_tag(t)) { "Married" } else { "Not set" };
+    assert!(combo(&h, start), "relationship menu shows {start}");
+    h.get_all_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some(start)).next().unwrap().scroll_to_me();
+    h.run_steps(3);
+    h.get_all_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some(start)).next().unwrap().click();
+    h.run_steps(3);
+    h.get_by_label("Registered partnership").click();
+    h.run_steps(3);
+    assert!(couple(&h).iter().any(|t| t == "MARR_RegisteredPartnership"), "{:?}", couple(&h));
+    assert!(couple(&h).iter().filter(|t| familyx::edit::is_marriage_tag(t)).count() == 1);
+    assert!(familyx::edit::check(&h.state().pkg.as_ref().unwrap().doc).is_empty());
+    h.get_by_label_contains("Unsaved changes");
+}
