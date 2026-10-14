@@ -64,8 +64,18 @@ pub fn gender_symbol(g: Gender) -> &'static str {
         Gender::Male => "♂",
         Gender::Female => "♀",
         Gender::Other => "*",
-        Gender::Unknown => "?",
+        Gender::Unknown => "",
     }
+}
+
+/// The small line under a name in a tree box: gender symbol and years.
+/// Nothing at all (not a lone "?") for someone without either.
+fn box_subtitle(person: &Person, half: bool) -> String {
+    let mut sub = format!("{} {}", gender_symbol(person.gender), person.lifespan());
+    if half {
+        sub.push_str(" · half");
+    }
+    sub.trim().to_string()
 }
 
 impl TreeView {
@@ -246,11 +256,14 @@ impl TreeView {
             font(15.0),
             Color32::WHITE,
         );
-        let mut sub = format!("{} {}", gender_symbol(person.gender), person.lifespan());
-        if let Role::Sibling { half: true } = node.role {
-            sub.push_str(" · half");
-        }
-        clip.text(c + Vec2::new(0.0, 12.0 * z), Align2::CENTER_CENTER, sub.trim(), font(13.0), Color32::from_gray(225));
+        let half = matches!(node.role, Role::Sibling { half: true });
+        clip.text(
+            c + Vec2::new(0.0, 12.0 * z),
+            Align2::CENTER_CENTER,
+            box_subtitle(person, half),
+            font(13.0),
+            Color32::from_gray(225),
+        );
 
         // more relatives beyond the view: small triangles above/below the box
         let tri = |tip: Pos2, up: bool| {
@@ -343,4 +356,18 @@ fn fit(layout: &Layout, canvas: Rect) -> (Vec2, f32) {
     let avail = canvas.shrink2(Vec2::new(0.0, 40.0));
     let zoom = (avail.width() / bounds.width()).min(avail.height() / bounds.height()).clamp(0.3, 1.1);
     (-bounds.center().to_vec2() * zoom, zoom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_gender_without_dates_shows_nothing() {
+        let mut p = Person::default();
+        assert_eq!(box_subtitle(&p, false), "");
+        assert_eq!(box_subtitle(&p, true), "· half");
+        p.gender = Gender::Female;
+        assert_eq!(box_subtitle(&p, false), "♀");
+    }
 }

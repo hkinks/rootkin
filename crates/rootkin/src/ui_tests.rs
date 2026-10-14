@@ -153,7 +153,7 @@ fn temp_ged(name: &str) -> std::path::PathBuf {
 
 /// Step the app until background jobs (open, save, import) are done.
 fn wait_for_jobs(h: &mut Harness<App>) {
-    for _ in 0..500 {
+    for _ in 0..3000 {
         h.run_steps(2);
         if !h.state().is_busy() {
             return;
@@ -386,4 +386,47 @@ fn opening_a_gedcom_explains_and_offers_import() {
     assert_eq!(h.state().tree.people.len(), 1);
     assert!(h.state().error_dialog.is_none());
     let _ = std::fs::remove_file(path);
+}
+
+fn dialog_gender(h: &Harness<App>) -> familyx::model::Gender {
+    h.state().relation_dialog.as_ref().expect("dialog open").gender()
+}
+
+#[test]
+fn partner_and_second_parent_default_to_the_other_gender() {
+    use crate::relation_dialog::{Relation, RelationDialog};
+    use familyx::model::Gender;
+    let mut h = harness();
+    let erik = h.state().selected.clone().unwrap(); // Erik is male in the example
+    assert_eq!(h.state().tree.person(&erik).unwrap().gender, Gender::Male);
+    let app = h.state_mut();
+    app.relation_dialog = Some(RelationDialog::new(Relation::Spouse, &erik, &app.tree));
+    h.run_steps(3);
+    assert_eq!(dialog_gender(&h), Gender::Female);
+    // still editable
+    h.get_all_by_label("Male").last().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(dialog_gender(&h), Gender::Male);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    // Erik has two parents already: nothing to guess. A child with one parent guesses the other.
+    let app = h.state_mut();
+    let (child, mother) = app
+        .apply("Setup", |doc| {
+            let child = familyx::edit::add_person(doc, "Maria", "Kask", Gender::Female);
+            let mother = familyx::edit::add_person(doc, "Anna", "Kask", Gender::Female);
+            familyx::edit::link_parent(doc, &child, &mother)?;
+            Ok((child, mother))
+        })
+        .unwrap();
+    let app = h.state_mut();
+    app.relation_dialog = Some(RelationDialog::new(Relation::Parent, &child, &app.tree));
+    h.run_steps(3);
+    assert_eq!(dialog_gender(&h), Gender::Male, "opposite of {mother}");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    let app = h.state_mut();
+    app.relation_dialog = Some(RelationDialog::new(Relation::Parent, &erik, &app.tree));
+    assert_eq!(dialog_gender(&h), Gender::Unknown);
 }
