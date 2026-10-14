@@ -263,3 +263,24 @@ fn toasts_stay_clear_of_the_person_panel() {
     assert!(undo.max.x <= panel.min.x, "toast {undo:?} overlaps the person panel {panel:?}");
     assert!(undo.center().x < panel.min.x && tree_area.min.x < undo.min.x);
 }
+
+/// egui's default proportional fonts have no glyph for these; they draw as empty boxes.
+#[test]
+fn user_facing_text_avoids_glyphs_missing_from_the_default_fonts() {
+    const MISSING: &[char] = &['\u{25cf}', '\u{2192}', '\u{2190}', '\u{2191}', '\u{2193}', '\u{2715}', '\u{25be}'];
+    let sources = [
+        ("app.rs", include_str!("app.rs")),
+        ("person_panel.rs", include_str!("person_panel.rs")),
+        ("sources.rs", include_str!("sources.rs")),
+        ("tree_view.rs", include_str!("tree_view.rs")),
+        ("relation_dialog.rs", include_str!("relation_dialog.rs")),
+        ("toasts.rs", include_str!("toasts.rs")),
+    ];
+    for (file, text) in sources {
+        for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim_start().starts_with("//")) {
+            if let Some(c) = line.chars().find(|c| MISSING.contains(c)) {
+                panic!("{file}:{}: {c:?} is not in egui's default fonts", n + 1);
+            }
+        }
+    }
+}

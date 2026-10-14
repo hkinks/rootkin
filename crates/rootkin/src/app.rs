@@ -657,7 +657,7 @@ impl App {
             }
             if self.pkg.is_some() {
                 if self.dirty() {
-                    ui.label(RichText::new("● Unsaved changes").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
+                    ui.label(RichText::new("Unsaved changes").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
                         .on_hover_text("Press Ctrl+S to save");
                 } else {
                     ui.label(RichText::new("✔ All changes saved").color(Color32::from_rgb(0x60, 0xb0, 0x60)));
@@ -959,7 +959,7 @@ fn migration_notice(pkg: &Package) -> Option<String> {
         report.media,
     );
     if report.from_version == familyx::migrate::schema14::APP12_VERSION {
-        msg.push_str("\n\nTo keep using the tree in My Family Tree 12, use File → Save a copy for My Family Tree 12…");
+        msg.push_str("\n\nTo keep using the tree in My Family Tree 12, use File > Save a copy for My Family Tree 12…");
     }
     if !report.dropped.is_empty() {
         msg.push_str(&format!("\n\nAs the original app does, Rootkin left out: {}.", report.dropped.join("; ")));
