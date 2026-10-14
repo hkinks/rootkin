@@ -679,6 +679,7 @@ impl Importer<'_> {
 
         let (mut dead, mut birth_year) = (false, None);
         let mut person_citations = Vec::new();
+        let mut online_photos = Vec::new();
         for c in p.elements() {
             match c.name.as_str() {
                 "eventref" => {
@@ -700,7 +701,10 @@ impl Importer<'_> {
                     self.cite(&fact, &cites);
                 }
                 "objref" => match self.objects.get(&handle(c)).cloned() {
-                    Some(file) => crate::import_photo(&mut self.pkg, &id, &file, self.resolve, &mut self.dropped),
+                    Some(file) => {
+                        let online = crate::import_photo(&mut self.pkg, &id, &file, self.resolve, &mut self.dropped);
+                        online_photos.extend(online.map(|url| format!("Online photo: {url}")));
+                    }
                     None => self.dropped.add("person.objref to unknown object"),
                 },
                 "citationref" => person_citations.push(handle(c)),
@@ -709,6 +713,7 @@ impl Importer<'_> {
             }
         }
         self.cite(&id, &person_citations);
+        edit::set_person_note(&mut self.pkg.doc, &id, &online_photos.join("\n\n"))?;
         edit::set_living(&mut self.pkg.doc, &id, vocab::guess_living(dead, birth_year))?;
         Ok(())
     }

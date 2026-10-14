@@ -154,7 +154,20 @@ impl ExportMedia {
 pub type Resolve<'a> = &'a dyn Fn(&str) -> Option<Vec<u8>>;
 
 /// Attach a referenced photo to a person, if it can be found and is PNG/JPEG.
-pub(crate) fn import_photo(pkg: &mut Package, person: &str, path: &str, resolve: Resolve, dropped: &mut Dropped) {
+/// An online photo (a web address) cannot be fetched: its address is returned
+/// for the caller to keep in the person's note.
+pub(crate) fn import_photo(
+    pkg: &mut Package,
+    person: &str,
+    path: &str,
+    resolve: Resolve,
+    dropped: &mut Dropped,
+) -> Option<String> {
+    let lower = path.trim().to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        dropped.add("online photo");
+        return Some(path.trim().to_string());
+    }
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
     let ext = match ext.as_str() {
@@ -162,7 +175,7 @@ pub(crate) fn import_photo(pkg: &mut Package, person: &str, path: &str, resolve:
         "jpg" | "jpeg" => "jpg",
         _ => {
             dropped.add("photo of a type other than PNG/JPEG");
-            return;
+            return None;
         }
     };
     match resolve(path) {
@@ -173,6 +186,7 @@ pub(crate) fn import_photo(pkg: &mut Package, person: &str, path: &str, resolve:
         }
         None => dropped.add("photo whose file was not found"),
     }
+    None
 }
 
 pub fn import(bytes: &[u8], format: Format) -> Result<(Package, ImportReport)> {

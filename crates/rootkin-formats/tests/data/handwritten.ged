@@ -13,7 +13,7 @@
 1 NAME Oskar /Valdmann/
 2 GIVN Oskar
 2 SURN Valdmann
-2 _MARNM yes
+2 _VENDORFLAG yes
 1 SEX M
 1 BIRT
 2 DATE BEF 1850
@@ -28,7 +28,7 @@
 2 CONT second paragraph
 1 _CUSTOM something vendor specific
 2 _SUB nested
-1 NOTE This person note is not supported
+1 NOTE A person note that is kept
 1 SOUR Family Bible
 2 PAGE flyleaf
 1 OBJE

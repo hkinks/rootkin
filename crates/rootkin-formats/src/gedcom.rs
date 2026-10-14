@@ -4,7 +4,7 @@
 //! their text in the fact's details; events keep it as a `NOTE`. Photos are
 //! `OBJE` records pointing at files; sources and repositories are `SOUR` and
 //! `REPO` records, cited with `SOUR` / `PAGE` on people and facts. Notes on people
-//! and `_CUSTOM` tags are not imported.
+//! are imported and exported as one note; `_CUSTOM` tags are not imported.
 
 use std::collections::{HashMap, HashSet};
 
@@ -134,6 +134,9 @@ pub(crate) fn export(pkg: &Package, v7: bool, media: &ExportMedia) -> Vec<u8> {
             // GEDCOM 7's "X"; 5.5.1 readers commonly accept it
             Gender::Other => w.raw(1, "SEX", "X"),
             Gender::Unknown => {}
+        }
+        for note in &person.notes {
+            w.line(1, "NOTE", &note.plain_text());
         }
         write_citations(&mut w, 1, &person.citations, &src);
         for fact in &person.facts {
@@ -294,6 +297,9 @@ fn write_fact(w: &mut Writer, fact: &Fact, in_family: bool, src: &HashMap<&str, 
         // tags GEDCOM does not know travel as a typed generic event
         w.raw(1, "EVEN", "");
         w.line(2, "TYPE", fact.label());
+    }
+    if tag == "EVEN" && !fact.custom_tag.is_empty() {
+        w.line(2, "TYPE", &fact.custom_tag);
     }
     let date = dates::from_model(&fact.date).to_gedcom();
     if !date.is_empty() {
@@ -503,7 +509,7 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
     };
     for n in &roots {
         match (&n.xref, n.tag.as_str()) {
-            (Some(x), "NOTE") => {
+            (Some(x), "NOTE" | "SNOTE") => {
                 imp.notes.insert(x.clone(), n.value.clone());
             }
             (Some(x), "OBJE") => {
@@ -526,7 +532,7 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
     }
     for n in &roots {
         match n.tag.as_str() {
-            "HEAD" | "TRLR" | "SUBM" | "SUBN" | "INDI" | "FAM" | "NOTE" | "OBJE" | "SOUR" | "REPO" => {}
+            "HEAD" | "TRLR" | "SUBM" | "SUBN" | "INDI" | "FAM" | "NOTE" | "SNOTE" | "OBJE" | "SOUR" | "REPO" => {}
             other => imp.dropped.add(format!("{other} record")),
         }
     }
@@ -561,18 +567,31 @@ impl Importer<'_> {
         }
     }
 
-    fn fact_input(&mut self, path: &str, n: &Node, attribute: bool) -> FactInput {
+    /// `type_is_name` leaves `TYPE` out of the details: it becomes the
+    /// event's own name.
+    fn fact_input(&mut self, path: &str, n: &Node, attribute: bool, type_is_name: bool) -> FactInput {
         let mut input = FactInput::default();
         let (mut ty, mut notes) = (String::new(), Vec::new());
         for c in &n.children {
             match c.tag.as_str() {
-                "DATE" => input.date = dates::to_model(&DateValue::from_gedcom(&c.value)),
+                "DATE" => {
+                    let mut date = DateValue::from_gedcom(&c.value);
+                    // GEDCOM 7: the words the submitter wrote for the date
+                    if let Some(phrase) = c.child_value("PHRASE") {
+                        if date.is_empty() || !date.text.is_empty() {
+                            date = DateValue { text: phrase.to_string(), ..Default::default() };
+                        } else {
+                            notes.push(format!("Date as written: {phrase}"));
+                        }
+                    }
+                    input.date = dates::to_model(&date);
+                }
                 "PLAC" => {
                     input.place = c.value.trim().to_string();
                     self.drop_children(&format!("{path}.PLAC"), c, &["FORM"]);
                 }
                 "TYPE" => ty = c.value.trim().to_string(),
-                "NOTE" => notes.push(self.note_text(c)),
+                "NOTE" | "SNOTE" => notes.push(self.note_text(c)),
                 // cited by the caller once the fact exists
                 "SOUR" => {}
                 t if SILENT.contains(&t) => {}
@@ -581,6 +600,7 @@ impl Importer<'_> {
         }
         let value = n.value.trim();
         let value = if value.is_empty() || (value == "Y" && !attribute) { None } else { Some(value.to_string()) };
+        let ty = if type_is_name { String::new() } else { ty };
         let parts: Vec<String> =
             [Some(ty), value].into_iter().flatten().chain(notes).filter(|s| !s.is_empty()).collect();
         input.details = parts.join("; ");
@@ -607,7 +627,7 @@ impl Importer<'_> {
                     "ABBR" => input.abbreviation = v,
                     "AUTH" => input.author = v,
                     "PUBL" => input.publisher = v,
-                    "NOTE" => notes.push(self.note_text(c)),
+                    "NOTE" | "SNOTE" => notes.push(self.note_text(c)),
                     "REPO" => match repos.get(v.as_str()) {
                         Some(id) => {
                             input.repository = Some(id.clone());
@@ -675,7 +695,12 @@ impl Importer<'_> {
 
     fn indi(&mut self, n: &Node) -> Result<()> {
         let names: Vec<&Node> = n.children_named("NAME").collect();
-        let (given, surname) = names.first().map(|n| self.name_parts(n)).unwrap_or_default();
+        let (mut given, surname, married) = names.first().map(|n| self.name_parts(n)).unwrap_or_default();
+        // Ancestry's stand-in for people it hides
+        let placeholder = given == "Living";
+        if placeholder {
+            given.clear();
+        }
         let gender = match n.child_value("SEX").and_then(|s| s.chars().next()) {
             Some('M' | 'm') => Gender::Male,
             Some('F' | 'f') => Gender::Female,
@@ -686,29 +711,43 @@ impl Importer<'_> {
         if let Some(x) = &n.xref {
             self.people.insert(x.clone(), id.clone());
         }
+        // `_MARNM`: the married surname, with the same given names
+        let mut married_names: Vec<(String, String)> = married.map(|m| (given.clone(), m)).into_iter().collect();
         for alt in names.iter().skip(1) {
-            let (g, s) = self.name_parts(alt);
+            let (g, s, m) = self.name_parts(alt);
             let ty = alt.child_value("TYPE").map(vocab::name_type).unwrap_or("");
             edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+            married_names.extend(m.map(|m| (g.clone(), m)));
         }
+        for (g, s) in married_names {
+            edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, "Married")?;
+        }
+        let mut person_notes: Vec<String> = Vec::new();
 
         let (mut dead, mut birth_year) = (false, None);
         for c in &n.children {
             let tag = c.tag.as_str();
             let attribute = INDI_ATTRIBUTES.contains(&tag);
             if attribute || INDI_EVENTS.contains(&tag) {
-                let input = self.fact_input(&format!("INDI.{tag}"), c, attribute);
+                // `EVEN` / `FACT` with a `TYPE` is an event the user named
+                let custom = matches!(tag, "EVEN" | "FACT").then(|| c.child_value("TYPE")).flatten();
+                let input = self.fact_input(&format!("INDI.{tag}"), c, attribute, custom.is_some());
                 if tag == "BIRT" {
                     birth_year = birth_year.or(input.date.year);
                 }
                 dead |= matches!(tag, "DEAT" | "BURI" | "CREM");
-                let fact = edit::add_fact(&mut self.pkg.doc, &id, tag, &input)?;
+                let fact = match custom {
+                    Some(name) => edit::add_custom_fact(&mut self.pkg.doc, &id, name, &input)?,
+                    None => edit::add_fact(&mut self.pkg.doc, &id, tag, &input)?,
+                };
                 self.cite(&format!("INDI.{tag}"), &fact, c)?;
                 if let (Some(xref), "ADOP") = (&n.xref, tag) {
                     for famc in c.children_named("FAMC") {
                         self.adopted.insert((famc.value.trim().to_string(), xref.clone()));
                     }
                 }
+            } else if tag == "NOTE" || tag == "SNOTE" {
+                person_notes.push(self.note_text(c));
             } else if tag == "SOUR" {
                 self.cite_line("INDI", &id, c)?;
             } else if tag == "OBJE" {
@@ -719,7 +758,10 @@ impl Importer<'_> {
                     c.child_value("FILE").map(str::to_string)
                 };
                 match file {
-                    Some(file) => crate::import_photo(&mut self.pkg, &id, &file, self.resolve, &mut self.dropped),
+                    Some(file) => {
+                        let online = crate::import_photo(&mut self.pkg, &id, &file, self.resolve, &mut self.dropped);
+                        person_notes.extend(online.map(|url| format!("Online photo: {url}")));
+                    }
                     None => self.dropped.add("INDI.OBJE without a file"),
                 }
             } else if tag == "FAMC" {
@@ -734,19 +776,28 @@ impl Importer<'_> {
                 self.dropped.add(format!("INDI.{tag}"));
             }
         }
-        edit::set_living(&mut self.pkg.doc, &id, vocab::guess_living(dead, birth_year))?;
+        let note = person_notes.into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join("\n\n");
+        edit::set_person_note(&mut self.pkg.doc, &id, &note)?;
+        let living = placeholder || vocab::guess_living(dead, birth_year);
+        edit::set_living(&mut self.pkg.doc, &id, living)?;
         Ok(())
     }
 
-    fn name_parts(&mut self, n: &Node) -> (String, String) {
+    /// (given names, surname, married surname from `_MARNM`)
+    fn name_parts(&mut self, n: &Node) -> (String, String, Option<String>) {
         let (mut given, mut surname, suffix) = split_name(&n.value);
-        let mut spfx = String::new();
+        let (mut spfx, mut married) = (String::new(), None);
         for c in &n.children {
             let v = c.value.trim();
             match c.tag.as_str() {
                 "GIVN" if !v.is_empty() => given = v.to_string(),
                 "SURN" if !v.is_empty() => surname = v.to_string(),
                 "SPFX" => spfx = v.to_string(),
+                "_MARNM" if !v.is_empty() => {
+                    // usually just the surname; some programs write `/Surname/`
+                    let (_, slashed, _) = split_name(v);
+                    married = Some(if v.contains('/') { slashed } else { v.to_string() });
+                }
                 "TYPE" => {}
                 t if SILENT.contains(&t) => {}
                 t => self.dropped.add(format!("INDI.NAME.{t}")),
@@ -758,7 +809,7 @@ impl Importer<'_> {
         if !suffix.is_empty() {
             self.dropped.add("INDI.NAME suffix");
         }
-        (given, surname)
+        (given, surname, married)
     }
 
     fn person(&mut self, fam: &str, tag: &str, n: &Node) -> Option<String> {
@@ -792,7 +843,7 @@ impl Importer<'_> {
         for c in &n.children {
             let tag = c.tag.as_str();
             if FAM_EVENTS.contains(&tag) {
-                let input = self.fact_input(&format!("FAM.{tag}"), c, false);
+                let input = self.fact_input(&format!("FAM.{tag}"), c, false, false);
                 match &link {
                     Some(link) => match edit::add_couple_fact(&mut self.pkg.doc, link, tag, &input) {
                         Ok(fact) => {

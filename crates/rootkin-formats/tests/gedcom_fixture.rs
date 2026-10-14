@@ -66,14 +66,15 @@ fn check(tree: &Tree, report: &ImportReport) {
 
     let has = |needle: &str| report.warnings.iter().any(|w| w.contains(needle));
     assert!(has("INDI._CUSTOM"), "{:?}", report.warnings);
-    assert!(has("INDI.NOTE"));
+    assert!(!has("INDI.NOTE"));
+    assert_eq!(by_name(tree, "Oskar Valdmann").notes[0].plain_text(), "A person note that is kept");
     assert!(has("photo"), "the OBJE file does not exist or is not PNG/JPEG");
     assert!(has("INDI.BIRT.SOUR.QUAY"));
     assert!(has("SOUR.DATA"));
     assert!(has("FAM._MARR_LICENCE"));
     assert!(has("FAM.MARR without two spouses"));
     assert!(!has("SOUR record") && !has("REPO record"));
-    assert!(has("INDI.NAME._MARNM"));
+    assert!(has("INDI.NAME._VENDORFLAG"));
 
     // sources, repositories and citations
     assert_eq!(tree.sources.len(), 2, "{:?}", tree.sources);
