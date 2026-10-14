@@ -7,6 +7,7 @@ mod formats;
 mod layout;
 mod person_panel;
 mod photos;
+mod problems;
 mod recent;
 mod relation_dialog;
 mod sources;

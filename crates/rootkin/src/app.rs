@@ -60,7 +60,7 @@ pub struct App {
     jobs: (mpsc::Sender<Job>, mpsc::Receiver<Job>),
     recent: Vec<PathBuf>,
     pub(crate) toasts: Toasts,
-    error_dialog: Option<String>,
+    pub(crate) error_dialog: Option<crate::problems::Problem>,
     /// An informational message shown in a dialog (e.g. after converting an old file).
     notice: Option<String>,
     show_about: bool,
@@ -179,7 +179,7 @@ impl App {
                     }
                 }
                 Job::Opened(path, Err(e)) => {
-                    self.error_dialog = Some(format!("Could not open {}:\n\n{e}", path.display()));
+                    self.error_dialog = Some(crate::problems::cannot_open(&path, &e));
                 }
                 Job::Imported(path, Ok((pkg, summary))) => {
                     self.load(pkg, None);
@@ -189,7 +189,7 @@ impl App {
                     self.import_summary = Some((file_name(&path), summary));
                 }
                 Job::Imported(path, Err(e)) => {
-                    self.error_dialog = Some(format!("Could not import {}:\n\n{e}", path.display()));
+                    self.error_dialog = Some(crate::problems::cannot_import(&path, &e));
                 }
                 Job::Saved(path, version, Ok(())) => {
                     self.saved_version = version;
@@ -201,8 +201,7 @@ impl App {
                 }
                 Job::Saved(path, _, Err(e)) => {
                     self.pending = None;
-                    self.error_dialog =
-                        Some(format!("Could not save {}:\n\n{e}\n\nYour changes are still open here.", path.display()));
+                    self.error_dialog = Some(crate::problems::cannot_save(&path, &e));
                 }
             }
         }
@@ -854,14 +853,38 @@ impl App {
             }
         }
 
-        if let Some(msg) = self.error_dialog.clone() {
+        if let Some(problem) = self.error_dialog.clone() {
+            let mut import = false;
+            let mut close = false;
             egui::Modal::new(egui::Id::new("error")).show(ctx, |ui| {
-                ui.heading(RichText::new("Something went wrong").color(Color32::LIGHT_RED));
-                ui.label(msg);
-                if ui.button("OK").clicked() {
-                    self.error_dialog = None;
-                }
+                ui.set_max_width(480.0);
+                ui.heading(RichText::new(&problem.heading).color(Color32::LIGHT_RED));
+                ui.label(&problem.message);
+                ui.add_space(4.0);
+                ui.label(RichText::new(file_name(&problem.path)).strong())
+                    .on_hover_text(problem.path.display().to_string());
+                egui::CollapsingHeader::new("Details").show(ui, |ui| {
+                    ui.label(RichText::new(problem.path.display().to_string()).monospace());
+                    if !problem.details.is_empty() {
+                        ui.label(RichText::new(&problem.details).monospace());
+                    }
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if problem.offer_import && ui.button(RichText::new("Import").strong()).clicked() {
+                        import = true;
+                    }
+                    if ui.button("OK").clicked() {
+                        close = true;
+                    }
+                });
             });
+            if import {
+                self.error_dialog = None;
+                self.request_import(problem.path);
+            } else if close {
+                self.error_dialog = None;
+            }
         }
 
         if let Some(msg) = self.notice.clone() {

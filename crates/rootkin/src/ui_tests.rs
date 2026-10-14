@@ -361,3 +361,29 @@ fn a_converted_file_says_converted_not_saved_yet() {
     h.get_by_label("Converted, not saved yet");
     assert!(h.query_by_label_contains("All changes saved").is_none());
 }
+
+#[test]
+fn opening_a_gedcom_explains_and_offers_import() {
+    let name = format!("rootkin-test-{}-notopen.ged", std::process::id());
+    let path = std::env::temp_dir().join(&name);
+    std::fs::write(&path, SMALL_GED).unwrap();
+    let mut h = Harness::builder().with_size([1200.0, 800.0]).build_eframe(|cc| App::new(cc, None));
+    h.run_steps(2);
+    h.state_mut().start_open(path.clone());
+    wait_for_jobs(&mut h);
+    h.run_steps(3);
+    h.get_by_label(&format!("Rootkin can't open {name}"));
+    assert!(h.query_by_label("Something went wrong").is_none());
+    h.get_by_label("This is a GEDCOM file. Use Import to bring it in.");
+    // the raw error and the full path stay behind "Details"
+    assert!(h.query_by_label_contains("Zip").is_none() && h.query_by_label_contains("zip:").is_none());
+    h.get_by_label("Details").click();
+    h.run_steps(3);
+    h.get_by_label_contains("zip:");
+    h.get_by_label("Import").click();
+    wait_for_jobs(&mut h);
+    h.run_steps(3);
+    assert_eq!(h.state().tree.people.len(), 1);
+    assert!(h.state().error_dialog.is_none());
+    let _ = std::fs::remove_file(path);
+}
