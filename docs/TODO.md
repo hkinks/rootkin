@@ -48,7 +48,7 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
       decrypt + HMAC + inflate, password check (unprotected), full `DataCollection` deserialization;
       the app's re-save reads back in Rootkin unchanged. Differences in Rootkin's XML are cosmetic
       (`IsPrimary` now limited to BIRT/DEAT/MARR/OCCU like the app).
-- [ ] Visual check in the Windows app's UI (rendering of dates/photos/charts) — needs a Windows machine (the app does not start under Wine 11: WPF font initialization fails, also with native DWrite)
+- [ ] Visual check in the Windows app's UI (rendering of dates/photos/charts) — needs a Windows machine (under Wine 11 the app gets past font setup once the fonts are registered, but never opens its main window, even with software rendering)
 
 ## Editing
 - [x] Notes: view/edit person notes and fact notes (`Notes/Notes/Note`, text/html/rtf formats)
