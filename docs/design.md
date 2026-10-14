@@ -343,6 +343,46 @@ against a real file**; only the fields listed under "written" are ever written.
 - Deleting a source removes every citation of it; `edit::check` reports citations of missing sources
   and sources whose repository is missing.
 
+## Adding a tree and merging people (`familyx::append`, `familyx::merge`, `familyx::duplicates`)
+
+**Import into this tree** (`Package::append`): `PeopleCollection`, `SourceCollection`, `RepositoryCollection`,
+`PackagedFileCollection`, `RelationshipCollection` and `TagCollection` children of the other package are cloned and
+appended. Every `Id` in the cloned subtrees (also names, facts, citations, notes) becomes a fresh id, and every attribute
+value or text equal to an old id (`Person1Id`, `FamilyId`, `SpouseId`, `ChildId`, `PrimaryImageId`, `Multimedia/string`,
+citation `Source`, source `Repository`) is rewritten, so back-references stay right and unknown elements keep their
+content. A source (same title, short title, author, publisher, call number and notes) or repository (same title) that
+already exists is reused and not copied. Photo parts get new `Multimedia/<guid>.<ext>` names, `RelativePath` is rewritten
+and the part and its package relationship are added. The target's own records, home person and author are untouched;
+`AuthorCollection`, `TaskCollection` and `FamilyProperties` of the other file are not carried. Undo restores the
+document only, so photo files stay unreferenced in the package (as after removing a photo).
+
+**Duplicates** (`duplicates::find_duplicates`): names are folded (case, diacritics, punctuation) and compared as sorted
+word sets, alternate names included. Candidates need birth years at most 2 apart, or one missing (then the name needs two
+words). Pairs that are already parent/child or partners, have different known genders, or death years more than 2 apart
+are skipped. Score: 60 for matching primary names (40 through an alternate name), plus 40/30/20 for birth years 0/1/2
+apart (10 if one is missing), 5 for the same death year, 10 each for a shared parent or partner. The import report uses it too.
+
+**Merge** (`merge::merge_people(doc, keep, remove, options)`), one call is one edit:
+
+| Element of the removed person | Result on the kept person |
+| --- | --- |
+| `PersonNameCollection` | names with the same words, suffix and nickname are not repeated; others become alternate names (`IsPrimary` removed). The removed primary name becomes primary only when chosen (`name_from`), then the kept primary becomes an alternate |
+| `Biology/Gender` | kept person's, unless unknown or `gender_from` says otherwise (unknown never overrules known) |
+| `Facts` | an event with the same tag, kind, date, place and details is not repeated but gives its citations and notes to the existing one; others are added, without `IsPrimary` when the kept person already has that tag |
+| `Notes`, `PersonCitationCollection` | added unless the same text, or the same source and page, is already there |
+| `Multimedia`, `PrimaryImageId`, `Face` | photo ids added; the removed primary photo (and face) is taken only if the kept person has none |
+| `IsLiving` | dropped when the removed person has a death event |
+| other children (`Associations`, `Tags`, unknown elements) | moved when the kept person has no element of that name |
+| `ParentChildLink` | `Person1Id`/`Person2Id` repointed; a link the kept person already has is dropped (its `ParentChildModifier` is copied when empty) |
+| `SpouseLink` | repointed; with a partner the kept person already has, the facts, status and unknown children move onto the existing link and the other link is deleted, with `FamilyId` references redirected and deduplicated |
+| `FamilySpouseLinks`, `FamilyChildLinks` | entries move over with `SpouseId`/`ChildId` set to the kept person, one per `FamilyId` |
+| links between the two people | deleted |
+| `HomePersonId`, `LastSavedPersonId` | point to the kept person |
+
+After the removed person is deleted (`edit::delete_person`), children of the kept person with both members of a couple
+as parents get their `FamilyChildLink` to that couple. Not handled: a merge that makes a person their own ancestor
+(the two were more distant relatives) is not detected; a citation's quality and notes are not compared.
+
 ## Architecture
 
 - `crates/familyx`: `codec` (crypto, all tree variants), `protection` (`FamilyId`), `doc` (lossless XML tree, byte-exact round-trip),

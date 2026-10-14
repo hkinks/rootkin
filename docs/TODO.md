@@ -11,7 +11,7 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 - [x] H1 Import `.gdz` and `.zip` containing `.ged` / `.gramps`
 - [x] H2 Import summary dialog in plain language (grouped report, duplicates, broken links, "Copy details" and "Save report")
 - [x] H3 Keep married names, GEDCOM 7 shared notes, date phrases, `EVEN`+`TYPE`, photo URLs, Ancestry "Living" placeholders (M4)
-- [ ] H4 Import into the current tree; find and merge duplicates
+- [x] H4 Import into the current tree; find and merge duplicates (File > Import into this tree, Edit > Find duplicate people, Merge with... in the person panel)
 - [x] H5 Second parent becomes the first parent's partner
 - [x] H6 "Add child" focuses Given names; Enter needs a given name
 - [x] H7 Toasts no longer cover the person panel buttons
