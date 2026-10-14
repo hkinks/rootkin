@@ -343,3 +343,21 @@ fn user_facing_text_avoids_glyphs_missing_from_the_default_fonts() {
         }
     }
 }
+
+const OLD_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../familyx/tests/data/old/app12_6.familyx");
+
+#[test]
+fn a_converted_file_says_converted_not_saved_yet() {
+    let mut h = Harness::builder().with_size([1400.0, 900.0]).build_eframe(|cc| App::new(cc, None));
+    h.run_steps(2);
+    h.state_mut().start_open(OLD_FILE.into());
+    wait_for_jobs(&mut h);
+    h.run_steps(3);
+    h.get_by_label("Older file converted");
+    h.get_by_label_contains("an older version of My Family Tree (version 12)");
+    assert!(h.query_by_label_contains("14.4").is_none());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    h.get_by_label("Converted, not saved yet");
+    assert!(h.query_by_label_contains("All changes saved").is_none());
+}

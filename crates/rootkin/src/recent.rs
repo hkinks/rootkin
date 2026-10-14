@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 const MAX: usize = 10;
 
 fn store() -> Option<PathBuf> {
+    if cfg!(test) {
+        return None; // tests must not touch the user's list
+    }
     Some(dirs::config_dir()?.join("rootkin").join("recent.txt"))
 }
 

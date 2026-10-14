@@ -70,6 +70,8 @@ pub struct App {
     /// file name "Save as" suggests.
     pub(crate) imported_from: Option<(String, String)>,
     pub(crate) sources_ui: crate::sources::SourcesUi,
+    /// The open tree was converted from an older file and not saved since.
+    pub(crate) converted: bool,
 }
 
 #[derive(Clone)]
@@ -115,6 +117,7 @@ impl App {
             import_summary: None,
             imported_from: None,
             sources_ui: crate::sources::SourcesUi::default(),
+            converted: false,
         };
         if let Some(path) = path {
             app.start_open(path);
@@ -135,7 +138,7 @@ impl App {
 
     /// Opening and saving derive keys with 210k PBKDF2 rounds; run them off
     /// the UI thread.
-    fn start_open(&mut self, path: PathBuf) {
+    pub(crate) fn start_open(&mut self, path: PathBuf) {
         let tx = self.jobs.0.clone();
         self.busy = Some(format!("Opening {}…", file_name(&path)));
         std::thread::spawn(move || {
@@ -167,7 +170,13 @@ impl App {
             match job {
                 Job::Opened(path, Ok(pkg)) => {
                     self.notice = migration_notice(&pkg);
+                    let converted = self.notice.is_some();
                     self.load(pkg, Some(path));
+                    if converted {
+                        // the converted tree only exists in memory until the first save
+                        self.converted = true;
+                        self.saved_version = u64::MAX;
+                    }
                 }
                 Job::Opened(path, Err(e)) => {
                     self.error_dialog = Some(format!("Could not open {}:\n\n{e}", path.display()));
@@ -184,6 +193,7 @@ impl App {
                 }
                 Job::Saved(path, version, Ok(())) => {
                     self.saved_version = version;
+                    self.converted = false;
                     crate::recent::remember(&mut self.recent, &path);
                     self.toasts.info(format!("Saved {}. The previous version is kept as .bak", file_name(&path)));
                     self.path = Some(path);
@@ -220,6 +230,7 @@ impl App {
         self.redo.clear();
         self.form = None;
         self.imported_from = None;
+        self.converted = false;
         self.version = 0;
         self.saved_version = if path.is_some() { 0 } else { u64::MAX };
         self.tree_view.fit_now();
@@ -671,7 +682,10 @@ impl App {
                 ui.label("New family tree");
             }
             if self.pkg.is_some() {
-                if self.dirty() {
+                if self.dirty() && self.converted {
+                    ui.label(RichText::new("Converted, not saved yet").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
+                        .on_hover_text("Press Ctrl+S to write the converted file");
+                } else if self.dirty() {
                     ui.label(RichText::new("Unsaved changes").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
                         .on_hover_text("Press Ctrl+S to save");
                 } else {
@@ -1020,16 +1034,27 @@ impl App {
 
 /// What to tell the user about a file converted from an older app version.
 fn migration_notice(pkg: &Package) -> Option<String> {
-    let report = pkg.migration()?;
-    let mut msg = format!(
-        "This file was made by an older version of My Family Tree (format {}). Rootkin converted it \
-         to the current format: {} relationships and {} photos were carried over.\n\n\
-         Saving writes the current format; your original file is kept next to it as .bak.",
-        if report.from_version.is_empty() { "unknown" } else { &report.from_version },
-        report.spouse_links + report.parent_links,
-        report.media,
+    Some(migration_text(pkg.migration()?))
+}
+
+fn migration_text(report: &familyx::migrate::Report) -> String {
+    let app12 = report.from_version == familyx::migrate::schema14::APP12_VERSION;
+    let origin =
+        if app12 { "an older version of My Family Tree (version 12)" } else { "an older version of My Family Tree" };
+    let mut msg = format!("This file was made by {origin}. Rootkin converted it to the current format.");
+    let counts: Vec<String> = [(report.spouse_links + report.parent_links, "relationship"), (report.media, "photo")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}{}", if n == 1 { "" } else { "s" }))
+        .collect();
+    if !counts.is_empty() {
+        msg.push_str(&format!(" {} were carried over.", counts.join(" and ")));
+    }
+    msg.push_str(
+        "\n\nNothing has been written yet. Saving writes the current format; your original file is kept \
+         next to it as .bak.",
     );
-    if report.from_version == familyx::migrate::schema14::APP12_VERSION {
+    if app12 {
         msg.push_str("\n\nTo keep using the tree in My Family Tree 12, use File > Save a copy for My Family Tree 12…");
     }
     if !report.dropped.is_empty() {
@@ -1042,7 +1067,7 @@ fn migration_notice(pkg: &Package) -> Option<String> {
             report.warnings.join("; ")
         ));
     }
-    Some(msg)
+    msg
 }
 
 pub(crate) fn file_name(path: &Path) -> String {
@@ -1133,5 +1158,31 @@ fn import_report_sections(ui: &mut egui::Ui, report: &crate::formats::ImportRepo
                 ui.label(RichText::new(w).monospace());
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_notice_mentions_only_meaningful_counts() {
+        let mut report = familyx::migrate::Report { from_version: "14.4".into(), ..Default::default() };
+        let msg = migration_text(&report);
+        assert!(msg.contains("an older version of My Family Tree (version 12)"));
+        assert!(!msg.contains("14.4") && !msg.contains("format 1"), "{msg}");
+        assert!(!msg.contains("carried over") && !msg.contains(" 0 "), "{msg}");
+
+        report.spouse_links = 2;
+        report.parent_links = 3;
+        let msg = migration_text(&report);
+        assert!(msg.contains("5 relationships were carried over"), "{msg}");
+
+        report.media = 1;
+        report.from_version = "9.0".into();
+        let msg = migration_text(&report);
+        assert!(msg.contains("5 relationships and 1 photo were carried over"), "{msg}");
+        assert!(msg.contains("an older version of My Family Tree."), "{msg}");
+        assert!(!msg.contains("version 12"), "{msg}");
     }
 }
