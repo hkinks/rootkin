@@ -501,12 +501,6 @@ pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)>
         adopted: HashSet::new(),
         famc_children: HashMap::new(),
     };
-    if let Some(ch) = roots[0].child_value("CHAR") {
-        if !matches!(ch.to_ascii_uppercase().as_str(), "UTF-8" | "UNICODE" | "UTF8") {
-            imp.warnings.push(format!("header declares character set {ch}; text was read as UTF-8 / UTF-16"));
-        }
-    }
-
     for n in &roots {
         match (&n.xref, n.tag.as_str()) {
             (Some(x), "NOTE") => {
@@ -896,6 +890,8 @@ mod tests {
         let text = decode(bytes, &mut warnings);
         assert!(text.contains("Liisu /Mäe/") && text.contains("René /Põder/"));
         assert!(warnings.is_empty());
+        let (_, report) = crate::import(bytes, crate::Format::Gedcom).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     }
 
     #[test]
