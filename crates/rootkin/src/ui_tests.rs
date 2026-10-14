@@ -220,3 +220,31 @@ fn add_child_dialog_focuses_given_names_and_enter_adds() {
     assert_eq!(h.state().tree.people.len(), before + 1);
     assert!(h.state().tree.people.iter().any(|p| p.display_name() == "Anna Lindqvist"));
 }
+
+#[test]
+fn a_second_parent_becomes_the_partner_of_the_first() {
+    let mut h = harness();
+    let app = h.state_mut();
+    let (child, father) = app
+        .apply("Setup", |doc| {
+            let child = familyx::edit::add_person(doc, "Maria", "Kask", familyx::model::Gender::Female);
+            let father = familyx::edit::add_person(doc, "Juri", "Kask", familyx::model::Gender::Male);
+            familyx::edit::link_parent(doc, &child, &father)?;
+            Ok((child, father))
+        })
+        .unwrap();
+    app.select(&child);
+    app.relation_dialog =
+        Some(crate::relation_dialog::RelationDialog::new(crate::relation_dialog::Relation::Parent, &child, &app.tree));
+    h.run_steps(4);
+    h.get_by_label("The new parent and Juri Kask are a couple");
+    h.event(egui::Event::Text("Anna".into()));
+    h.run_steps(3);
+    h.get_by_label("Anna and Juri Kask are a couple");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let app = h.state();
+    let mother = app.tree.parents(&child).into_iter().find(|p| *p != father).expect("second parent").to_string();
+    assert_eq!(app.tree.person(&mother).unwrap().display_name(), "Anna");
+    assert_eq!(app.tree.spouses(&father), vec![mother.as_str()]);
+}
