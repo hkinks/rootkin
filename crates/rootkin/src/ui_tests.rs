@@ -189,6 +189,11 @@ fn import_asks_before_replacing_unsaved_changes() {
     h.get_by_label("Don't save").click();
     wait_for_jobs(&mut h);
     assert_eq!(h.state().tree.people.len(), 1);
+    h.run_steps(2);
+    h.get_by_label_contains("1 person and 0 families came in");
+    h.get_by_label("Look around first").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Look around first").is_none());
     let _ = std::fs::remove_file(path);
 }
 

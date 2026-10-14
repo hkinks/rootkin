@@ -19,7 +19,7 @@ const UNDO_LIMIT: usize = 100;
 enum Job {
     Opened(PathBuf, Result<Package, String>),
     /// A converted genealogy file and a summary of what came in.
-    Imported(PathBuf, Result<(Package, String), String>),
+    Imported(PathBuf, Result<(Package, crate::formats::Summary), String>),
     Saved(PathBuf, u64, Result<(), String>),
 }
 
@@ -64,6 +64,8 @@ pub struct App {
     /// An informational message shown in a dialog (e.g. after converting an old file).
     notice: Option<String>,
     show_about: bool,
+    /// File name and result of the last import, shown until dismissed.
+    import_summary: Option<(String, crate::formats::Summary)>,
     pub(crate) sources_ui: crate::sources::SourcesUi,
 }
 
@@ -107,6 +109,7 @@ impl App {
             error_dialog: None,
             notice: None,
             show_about: false,
+            import_summary: None,
             sources_ui: crate::sources::SourcesUi::default(),
         };
         if let Some(path) = path {
@@ -165,10 +168,10 @@ impl App {
                 Job::Opened(path, Err(e)) => {
                     self.error_dialog = Some(format!("Could not open {}:\n\n{e}", path.display()));
                 }
-                Job::Imported(_, Ok((pkg, report))) => {
+                Job::Imported(path, Ok((pkg, summary))) => {
                     self.load(pkg, None);
                     self.saved_version = u64::MAX;
-                    self.toasts.info(format!("Imported {report}. Save it as a .familyx file to keep it."));
+                    self.import_summary = Some((file_name(&path), summary));
                 }
                 Job::Imported(path, Err(e)) => {
                     self.error_dialog = Some(format!("Could not import {}:\n\n{e}", path.display()));
@@ -844,6 +847,43 @@ impl App {
                     self.notice = None;
                 }
             });
+        }
+
+        if let Some((file, summary)) = &self.import_summary {
+            let mut choice = None;
+            egui::Modal::new(egui::Id::new("import_summary")).show(ctx, |ui| {
+                ui.set_max_width(520.0);
+                ui.heading(format!("Imported {file}"));
+                ui.label(format!("{} came in. It is open as a new tree that is not saved yet.", summary.headline()));
+                if !summary.notes.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(format!("{} things could not be brought over exactly:", summary.notes.len()));
+                    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                        for note in &summary.notes {
+                            ui.label(format!("- {note}"));
+                        }
+                    });
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("Save as .familyx…").strong()).clicked() {
+                        choice = Some(true);
+                    }
+                    if ui.button("Look around first").clicked() {
+                        choice = Some(false);
+                    }
+                    if ui.button("Copy details").clicked() {
+                        ui.ctx().copy_text(summary.details(file));
+                    }
+                });
+            });
+            if let Some(save) = choice {
+                self.import_summary = None;
+                if save {
+                    self.flush_form();
+                    self.pick_save_as();
+                }
+            }
         }
 
         if self.show_about {

@@ -4,14 +4,34 @@ use std::path::Path;
 
 use familyx::Package;
 
-/// Import a genealogy file into a new tree; the `String` summarizes the result.
-pub fn import(path: &Path) -> Result<(Package, String), String> {
-    let (pkg, report) = rootkin_formats::import_path(path).map_err(|e| e.to_string())?;
-    let mut summary = format!("{} people and {} families", report.people, report.families);
-    if !report.warnings.is_empty() {
-        summary.push_str(&format!(" ({} notes: {})", report.warnings.len(), report.warnings.join("; ")));
+/// What an import brought in, and the notes about what it left out.
+pub struct Summary {
+    pub people: usize,
+    pub families: usize,
+    pub notes: Vec<String>,
+}
+
+impl Summary {
+    /// "1 person and 2 families"
+    pub fn headline(&self) -> String {
+        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        format!("{} and {}", plural(self.people, "person", "people"), plural(self.families, "family", "families"))
     }
-    Ok((pkg, summary))
+
+    /// The whole report as plain text, for copying.
+    pub fn details(&self, file: &str) -> String {
+        let mut text = format!("Imported {file}: {}\n", self.headline());
+        for note in &self.notes {
+            text.push_str(&format!("- {note}\n"));
+        }
+        text
+    }
+}
+
+/// Import a genealogy file into a new tree.
+pub fn import(path: &Path) -> Result<(Package, Summary), String> {
+    let (pkg, report) = rootkin_formats::import_path(path).map_err(|e| e.to_string())?;
+    Ok((pkg, Summary { people: report.people, families: report.families, notes: report.warnings }))
 }
 
 pub use rootkin_formats::Format;
