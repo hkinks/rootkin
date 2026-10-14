@@ -18,6 +18,8 @@ const UNDO_LIMIT: usize = 100;
 /// A finished background job.
 enum Job {
     Opened(PathBuf, Result<Package, String>),
+    /// A converted genealogy file and a summary of what came in.
+    Imported(PathBuf, Result<(Package, String), String>),
     Saved(PathBuf, u64, Result<(), String>),
 }
 
@@ -113,6 +115,11 @@ impl App {
         app
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_busy(&self) -> bool {
+        self.busy.is_some()
+    }
+
     fn dirty(&self) -> bool {
         self.pkg.is_some() && self.version != self.saved_version
     }
@@ -157,6 +164,14 @@ impl App {
                 }
                 Job::Opened(path, Err(e)) => {
                     self.error_dialog = Some(format!("Could not open {}:\n\n{e}", path.display()));
+                }
+                Job::Imported(_, Ok((pkg, report))) => {
+                    self.load(pkg, None);
+                    self.saved_version = u64::MAX;
+                    self.toasts.info(format!("Imported {report}. Save it as a .familyx file to keep it."));
+                }
+                Job::Imported(path, Err(e)) => {
+                    self.error_dialog = Some(format!("Could not import {}:\n\n{e}", path.display()));
                 }
                 Job::Saved(path, version, Ok(())) => {
                     self.saved_version = version;
@@ -866,15 +881,14 @@ impl App {
         self.guarded(Pending::Import(path));
     }
 
+    /// Converting a big file takes a while; do it off the UI thread.
     fn start_import(&mut self, path: PathBuf) {
-        match crate::formats::import(&path) {
-            Ok((pkg, report)) => {
-                self.load(pkg, None);
-                self.saved_version = u64::MAX;
-                self.toasts.info(format!("Imported {}. Save it as a .familyx file to keep it.", report));
-            }
-            Err(e) => self.error_dialog = Some(format!("Could not import {}:\n\n{e}", path.display())),
-        }
+        let tx = self.jobs.0.clone();
+        self.busy = Some(format!("Importing {}…", file_name(&path)));
+        std::thread::spawn(move || {
+            let result = crate::formats::import(&path);
+            let _ = tx.send(Job::Imported(path, result));
+        });
     }
 
     fn save_copy_for_app12(&mut self) {

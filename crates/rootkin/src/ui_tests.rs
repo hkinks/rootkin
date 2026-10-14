@@ -151,6 +151,18 @@ fn temp_ged(name: &str) -> std::path::PathBuf {
     path
 }
 
+/// Step the app until background jobs (open, save, import) are done.
+fn wait_for_jobs(h: &mut Harness<App>) {
+    for _ in 0..500 {
+        h.run_steps(2);
+        if !h.state().is_busy() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("background job did not finish");
+}
+
 #[test]
 fn import_asks_before_replacing_unsaved_changes() {
     let path = temp_ged("guard");
@@ -175,7 +187,7 @@ fn import_asks_before_replacing_unsaved_changes() {
     h.state_mut().request_import(path.clone());
     h.run_steps(3);
     h.get_by_label("Don't save").click();
-    h.run_steps(3);
+    wait_for_jobs(&mut h);
     assert_eq!(h.state().tree.people.len(), 1);
     let _ = std::fs::remove_file(path);
 }
