@@ -25,6 +25,7 @@ Rootkin is an independent project and is not affiliated with Chronoplex Software
   undo and redo
 - Photos with face crops for the tree view
 - Import and export GEDCOM (5.5.1 and 7.0) and Gramps XML, including photos; also zipped (.gdz, or a .zip holding a .ged or .gramps)
+- Add a GEDCOM or Gramps file to the tree you already have, find people who appear twice and merge them (one undo step)
 - Export the tree as SVG or PNG, and print family reports
 - Safe saves: the previous version is kept as a `.bak` copy
 
