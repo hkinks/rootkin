@@ -39,7 +39,7 @@ const PARENT_KINDS: &[(&str, &str)] =
     &[("", "Biological"), ("Adopted", "Adoptive"), ("Foster", "Foster"), ("Step", "Step"), ("Guardian", "Guardian")];
 /// The app's `SpouseRelationshipStatus` values.
 const COUPLE_STATUS: &[(&str, &str)] = &[
-    ("", "—"),
+    ("", "Not set"),
     ("Current", "Together"),
     ("Engaged", "Engaged"),
     ("Separated", "Separated"),
@@ -322,7 +322,7 @@ fn fact_editor(
         lost |= r.lost_focus();
         match &parsed {
             Err(e) => {
-                ui.colored_label(Color32::from_rgb(0xff, 0x80, 0x80), format!("⚠ {e} — not saved yet"));
+                ui.colored_label(Color32::from_rgb(0xff, 0x80, 0x80), format!("⚠ {e} (not saved yet)"));
             }
             Ok(d) if r.has_focus() && !d.is_empty() => {
                 ui.weak(format!("Understood as: {}", d.display()));

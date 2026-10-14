@@ -2,7 +2,7 @@
 Type=Application
 Name=Rootkin
 GenericName=Family Tree Editor
-Comment=Keep your family tree on your own computer — no cloud, no account
+Comment=Keep your family tree on your own computer. No cloud, no account
 Exec=rootkin %f
 Icon=rootkin
 Terminal=false

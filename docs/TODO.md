@@ -1,6 +1,6 @@
 # TODO
 
-See also [ux-review.md](ux-review.md) — its "Top 5" are the next UX priorities.
+See also [ux-review.md](ux-review.md); its "Top 5" are the next UX priorities.
 
 ## Next steps
 
@@ -48,7 +48,7 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
       decrypt + HMAC + inflate, password check (unprotected), full `DataCollection` deserialization;
       the app's re-save reads back in Rootkin unchanged. Differences in Rootkin's XML are cosmetic
       (`IsPrimary` now limited to BIRT/DEAT/MARR/OCCU like the app).
-- [ ] Visual check in the Windows app's UI (rendering of dates/photos/charts) — needs a Windows machine (under Wine 11 the app gets past font setup once the fonts are registered, but never opens its main window, even with software rendering)
+- [ ] Visual check in the Windows app's UI (rendering of dates/photos/charts). Needs a Windows machine (under Wine 11 the app gets past font setup once the fonts are registered, but never opens its main window, even with software rendering)
 
 ## Editing
 - [x] Notes: view/edit person notes and fact notes (`Notes/Notes/Note`, text/html/rtf formats)

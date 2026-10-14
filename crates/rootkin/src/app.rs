@@ -160,7 +160,7 @@ impl App {
                 Job::Saved(path, version, Ok(())) => {
                     self.saved_version = version;
                     crate::recent::remember(&mut self.recent, &path);
-                    self.toasts.info(format!("Saved {} — the previous version is kept as .bak", file_name(&path)));
+                    self.toasts.info(format!("Saved {}. The previous version is kept as .bak", file_name(&path)));
                     self.path = Some(path);
                     self.after_save();
                 }
@@ -304,7 +304,7 @@ impl App {
         };
         match std::fs::write(&path, html) {
             Ok(()) => {
-                self.toasts.info("Report saved and opened in your browser — print it from there");
+                self.toasts.info("Report saved and opened in your browser. Print it from there.");
                 let _ = open::that_detached(&path);
             }
             Err(e) => self.toasts.error(format!("Could not save the report: {e}")),
@@ -651,7 +651,7 @@ impl App {
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() * 0.15);
             ui.heading(RichText::new("Rootkin").size(34.0));
-            ui.label("Your family tree, on your computer — no cloud, no account.");
+            ui.label("Your family tree on your own computer. No cloud, no account.");
             ui.add_space(24.0);
             let big = |t: &str| egui::Button::new(RichText::new(t).size(18.0)).min_size(egui::vec2(280.0, 44.0));
             if ui.add(big("Start a new family tree")).clicked() {
@@ -857,7 +857,7 @@ impl App {
                 }
                 self.load(pkg, None);
                 self.saved_version = u64::MAX;
-                self.toasts.info(format!("Imported {} — save it as a .familyx file to keep it", report));
+                self.toasts.info(format!("Imported {}. Save it as a .familyx file to keep it.", report));
             }
             Err(e) => self.error_dialog = Some(format!("Could not import {}:\n\n{e}", path.display())),
         }
