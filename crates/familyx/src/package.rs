@@ -112,6 +112,23 @@ impl Package {
         Ok(())
     }
 
+    /// Add everyone and everything of `other` to this tree ("import into this tree"): people,
+    /// couples and parent links, sources (existing ones are reused), citations, notes and photo
+    /// files, all with new ids. Nothing already here changes, and the home person stays.
+    ///
+    /// Undo by restoring `self.doc`; photo files copied here then remain in the package
+    /// unreferenced, as with a removed photo.
+    pub fn append(&mut self, other: &Package) -> Result<crate::AppendReport> {
+        let (report, parts) = crate::append::append_document(&mut self.doc, &other.doc);
+        for part in parts {
+            // a missing file leaves a photo record without a picture, as in the other package
+            let Some(bytes) = other.part(&part.old) else { continue };
+            self.add_relationship(&format!("/{}", part.new))?;
+            self.parts.push((part.new, bytes.to_vec()));
+        }
+        Ok(report)
+    }
+
     /// Attach a photo already in the package to another person.
     pub fn share_photo(&mut self, person_id: &str, media_id: &str) -> Result<()> {
         edit::link_photo(&mut self.doc, person_id, media_id).map_err(|e| Error::Format(e.to_string()))

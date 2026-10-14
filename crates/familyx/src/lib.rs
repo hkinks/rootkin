@@ -5,6 +5,7 @@
 //! `Multimedia/`. The XML is kept as a lossless [`doc::Document`] so that
 //! saving preserves everything this crate does not understand.
 
+mod append;
 pub mod codec;
 pub mod date;
 pub mod doc;
@@ -13,12 +14,14 @@ pub mod edit;
 mod index;
 mod lds_temples;
 pub mod litedb;
+pub mod merge;
 pub mod migrate;
 pub mod model;
 pub mod package;
 pub mod protection;
 pub mod richtext;
 
+pub use append::AppendReport;
 pub use package::Package;
 
 #[derive(Debug, thiserror::Error)]

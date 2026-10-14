@@ -169,7 +169,7 @@ pub type EditResult<T> = std::result::Result<T, EditError>;
 
 /// A top-level collection, to add or remove children. That may invalidate the
 /// document's lookup tables (see `index`), so they are dropped.
-fn collection<'a>(doc: &'a mut Document, name: &str) -> &'a mut Element {
+pub(crate) fn collection<'a>(doc: &'a mut Document, name: &str) -> &'a mut Element {
     doc.forget_index();
     collection_keep(doc, name)
 }
@@ -180,7 +180,7 @@ fn collection_keep<'a>(doc: &'a mut Document, name: &str) -> &'a mut Element {
     doc.root.ensure_child(name, FAMILY_ORDER)
 }
 
-fn person_mut<'a>(doc: &'a mut Document, id: &str) -> EditResult<&'a mut Element> {
+pub(crate) fn person_mut<'a>(doc: &'a mut Document, id: &str) -> EditResult<&'a mut Element> {
     let pos = doc.person_pos(id);
     let people = collection_keep(doc, "PeopleCollection");
     match pos.and_then(|p| people.children.get_mut(p)) {
@@ -189,7 +189,7 @@ fn person_mut<'a>(doc: &'a mut Document, id: &str) -> EditResult<&'a mut Element
     }
 }
 
-fn touch(person: &mut Element) {
+pub(crate) fn touch(person: &mut Element) {
     if person.attr("LastSaved").is_some() {
         person.set_attr("LastSaved", &local_now());
     }
@@ -421,7 +421,7 @@ fn fact_mut<'a>(doc: &'a mut Document, fact_id: &str) -> EditResult<&'a mut Elem
 
 /// Whether the app marks the first fact with this tag `IsPrimary` (in files
 /// it writes, only these tags carry the flag).
-fn takes_primary(tag: &str) -> bool {
+pub(crate) fn takes_primary(tag: &str) -> bool {
     matches!(tag, "BIRT" | "DEAT" | "MARR" | "OCCU") || tag.starts_with("MARR_")
 }
 
@@ -576,7 +576,7 @@ fn new_link(kind: &str, p1: &str, p2: &str) -> Element {
 }
 
 /// Add `FamilyChildLink` on `child` → couple link, unless present.
-fn add_family_child_link(doc: &mut Document, child: &str, family: &str) -> EditResult<()> {
+pub(crate) fn add_family_child_link(doc: &mut Document, child: &str, family: &str) -> EditResult<()> {
     let person = person_mut(doc, child)?;
     let links = person.ensure_child("FamilyChildLinks", PERSON_ORDER);
     if !links.children_named("FamilyChildLink").any(|l| l.attr("FamilyId").as_deref() == Some(family)) {
@@ -585,7 +585,7 @@ fn add_family_child_link(doc: &mut Document, child: &str, family: &str) -> EditR
     Ok(())
 }
 
-fn validate_pair(doc: &Document, a: &str, b: &str) -> EditResult<()> {
+pub(crate) fn validate_pair(doc: &Document, a: &str, b: &str) -> EditResult<()> {
     if a == b {
         return Err(EditError::Invalid("a person cannot be related to themselves"));
     }
@@ -707,13 +707,13 @@ pub fn unlink_spouse(doc: &mut Document, a: &str, b: &str) -> EditResult<()> {
     Ok(())
 }
 
-fn remove_relationship(doc: &mut Document, link_id: &str) {
+pub(crate) fn remove_relationship(doc: &mut Document, link_id: &str) {
     collection(doc, "RelationshipCollection")
         .remove_children_where(|l| l.name == "RelationshipLink" && l.attr("Id").as_deref() == Some(link_id));
 }
 
 /// Remove a couple link and every back-reference to it.
-fn remove_spouse_link(doc: &mut Document, link_id: &str) {
+pub(crate) fn remove_spouse_link(doc: &mut Document, link_id: &str) {
     remove_relationship(doc, link_id);
     for person in collection(doc, "PeopleCollection").elements_mut() {
         for list in ["FamilySpouseLinks", "FamilyChildLinks"] {

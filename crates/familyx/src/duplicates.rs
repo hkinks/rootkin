@@ -52,7 +52,7 @@ pub fn fold(text: &str) -> String {
 }
 
 /// The comparable form of a name: folded words in alphabetical order.
-fn name_key(given: &str, prefix: &str, surname: &str) -> String {
+pub(crate) fn name_key(given: &str, prefix: &str, surname: &str) -> String {
     let folded = fold(&format!("{given} {prefix} {surname}"));
     let mut words: Vec<&str> = folded.split_whitespace().collect();
     words.sort_unstable();
