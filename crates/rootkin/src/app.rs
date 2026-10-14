@@ -7,6 +7,7 @@ use familyx::edit::{self, EditResult};
 use familyx::model::{Id, Person, Tree};
 use familyx::Package;
 
+use crate::people_list::SortBy;
 use crate::person_panel::PersonForm;
 use crate::photos::PhotoCache;
 use crate::relation_dialog::RelationDialog;
@@ -23,13 +24,6 @@ enum Job {
     Saved(PathBuf, u64, Result<(), String>),
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum SortBy {
-    Surname,
-    GivenName,
-    Birth,
-}
-
 pub struct App {
     ctx: egui::Context,
     pub(crate) path: Option<PathBuf>,
@@ -39,9 +33,13 @@ pub struct App {
     pub(crate) selected: Option<Id>,
     history: Vec<Id>,
     future: Vec<Id>,
-    search: String,
-    sort_by: SortBy,
-    living_only: bool,
+    pub(crate) search: String,
+    pub(crate) sort_by: SortBy,
+    pub(crate) living_only: bool,
+    pub(crate) list_cache: crate::people_list::ListCache,
+    pub(crate) list_jump: Option<usize>,
+    /// Bumped whenever `tree` is rebuilt; the people list caches against it.
+    pub(crate) tree_epoch: u64,
     pub(crate) photos: PhotoCache,
     tree_view: TreeView,
     pub(crate) form: Option<PersonForm>,
@@ -95,6 +93,9 @@ impl App {
             search: String::new(),
             sort_by: SortBy::Surname,
             living_only: false,
+            list_cache: Default::default(),
+            list_jump: None,
+            tree_epoch: 0,
             photos: PhotoCache::default(),
             tree_view: TreeView::default(),
             form: None,
@@ -220,6 +221,7 @@ impl App {
 
     pub(crate) fn load(&mut self, pkg: Package, path: Option<PathBuf>) {
         self.tree = Tree::from_doc(&pkg.doc);
+        self.tree_epoch += 1;
         self.selected = self.tree.home_person.clone().or_else(|| self.tree.people.first().map(|p| p.id.clone()));
         self.history.clear();
         self.future.clear();
@@ -417,6 +419,7 @@ impl App {
     fn after_change(&mut self) {
         let Some(pkg) = &self.pkg else { return };
         self.tree = Tree::from_doc(&pkg.doc);
+        self.tree_epoch += 1;
         self.version += 1;
         if self.selected.as_deref().is_some_and(|id| self.tree.person(id).is_none()) {
             self.selected = self.history.pop().filter(|id| self.tree.person(id).is_some());
@@ -742,69 +745,6 @@ impl App {
                 self.relation_dialog = Some(RelationDialog::new_unrelated());
             }
         });
-    }
-
-    fn people_list(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.search)
-                    .hint_text("Search names, places, years…")
-                    .desired_width(ui.available_width() - 28.0),
-            );
-            if !self.search.is_empty() && ui.small_button("✖").on_hover_text("Clear search").clicked() {
-                self.search.clear();
-            }
-        });
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("sort")
-                .selected_text(match self.sort_by {
-                    SortBy::Surname => "Sort: surname",
-                    SortBy::GivenName => "Sort: first name",
-                    SortBy::Birth => "Sort: birth year",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.sort_by, SortBy::Surname, "Surname");
-                    ui.selectable_value(&mut self.sort_by, SortBy::GivenName, "First name");
-                    ui.selectable_value(&mut self.sort_by, SortBy::Birth, "Birth year");
-                });
-            ui.checkbox(&mut self.living_only, "Living only");
-        });
-
-        let needle = self.search.to_lowercase();
-        let matches = |p: &Person| {
-            needle.is_empty()
-                || p.names.iter().any(|n| n.display().to_lowercase().contains(&needle))
-                || p.facts
-                    .iter()
-                    .any(|f| f.place.to_lowercase().contains(&needle) || f.date.display().contains(&needle))
-        };
-        let mut people: Vec<&Person> =
-            self.tree.people.iter().filter(|p| (!self.living_only || p.is_living) && matches(p)).collect();
-        match self.sort_by {
-            SortBy::Surname => people.sort_by_cached_key(|p| sort_key(p)),
-            SortBy::GivenName => people.sort_by_cached_key(|p| {
-                let (unnamed, s, g) = sort_key(p);
-                (unnamed, g, s)
-            }),
-            SortBy::Birth => people
-                .sort_by_cached_key(|p| (p.fact("BIRT").and_then(|f| f.date.year).unwrap_or(i32::MAX), sort_key(p))),
-        }
-        ui.weak(format!("{} of {} people", people.len(), self.tree.people.len()));
-        ui.separator();
-
-        let mut clicked = None;
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for p in people {
-                let is_selected = self.selected.as_deref() == Some(p.id.as_str());
-                let label = format!("{}  {}", p.display_name(), p.lifespan());
-                if ui.selectable_label(is_selected, label).clicked() {
-                    clicked = Some(p.id.clone());
-                }
-            }
-        });
-        if let Some(id) = clicked {
-            self.select(&id);
-        }
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {

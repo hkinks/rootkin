@@ -5,6 +5,7 @@ mod app;
 mod export;
 mod formats;
 mod layout;
+mod people_list;
 mod person_panel;
 mod photos;
 mod problems;

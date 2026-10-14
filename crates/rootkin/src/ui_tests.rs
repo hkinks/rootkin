@@ -449,3 +449,40 @@ fn the_date_field_explains_ambiguous_numeric_dates() {
     h.run_steps(3);
     h.get_by_label("Understood as: 1950s");
 }
+
+/// A tree with `n` people named after the letters of the alphabet.
+fn big_app(n: usize) -> Harness<'static, App> {
+    let mut pkg = Package::new();
+    let names = ["Aas", "Berg", "Kask", "Mägi", "Ilves", "Tamm", "Saar", "Õun"];
+    for i in 0..n {
+        let surname = format!("{}{}", names[i % names.len()], i / names.len() / 20);
+        familyx::edit::add_person(&mut pkg.doc, &format!("P{i}"), &surname, familyx::model::Gender::Unknown);
+    }
+    let mut h = Harness::builder().with_size([1400.0, 900.0]).build_eframe(|cc| {
+        let mut app = App::new(cc, None);
+        app.load(pkg, None);
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+#[test]
+fn a_big_people_list_has_a_letter_strip_that_jumps() {
+    let mut h = big_app(600);
+    // only the visible rows exist, yet the strip reaches every letter
+    assert!(h.query_by_label_contains("P599").is_none());
+    h.get_by_label("P0 Aas0  "); // the first row of the list
+    h.get_all_by_label("T").next().unwrap().click();
+    h.run_steps(4);
+    assert!(h.query_by_label("P0 Aas0  ").is_none(), "the list moved on to T");
+    assert_eq!(h.get_all_by_label("T").count(), 2, "strip button and heading");
+    assert!(h.get_all_by_label_contains("Tamm").count() > 3);
+}
+
+#[test]
+fn a_small_people_list_has_no_letter_strip() {
+    let h = big_app(50);
+    assert!(h.query_by_label("Jump to this letter").is_none());
+    h.get_by_label_contains("P49");
+}

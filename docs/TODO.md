@@ -22,7 +22,7 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 - [ ] M3 Plain-language error dialogs
 - [x] M5 Sensible default gender for new partner/parent; no lone "?" in tree boxes
 - [x] M6 Dates: decades, localized month names, ambiguous numeric dates, impossible GEDCOM dates
-- [ ] M8 People list: sort by birth year within a name, surname groups, fast for 20,000 people
+- [x] M8 People list: sort by birth year within a name, surname groups, fast for 20,000 people
 - [ ] Low: recent files layout, collapsible person panel, "Try the example tree"
 
 ## Next steps
