@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
   <rect width="256" height="256" rx="48" fill="#24323f"/>
+  <g transform="matrix(1 0 0 -1 0 256)">
   <g stroke="#e8c070" stroke-width="10" fill="none" stroke-linecap="round">
     <path d="M128 60 V128 M128 128 C128 170 80 160 72 196 M128 128 C128 170 176 160 184 196 M128 128 V200"/>
   </g>
@@ -7,4 +8,5 @@
   <circle cx="72" cy="200" r="18" fill="#c0607f"/>
   <circle cx="128" cy="206" r="18" fill="#4f8fc0"/>
   <circle cx="184" cy="200" r="18" fill="#c0607f"/>
+  </g>
 </svg>
