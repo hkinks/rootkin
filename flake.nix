@@ -17,7 +17,8 @@
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           cargoBuildFlags = [ "-p" "rootkin" "-p" "rootkin-cli" ];
-          cargoTestFlags = [ "--workspace" ];
+          # Tests run in CI and in `nix flake check` (checks.tests), not on every install
+          doCheck = false;
           nativeBuildInputs = [ pkgs.makeWrapper ];
           postInstall = ''
             install -Dm644 assets/rootkin.desktop $out/share/applications/rootkin.desktop
@@ -33,6 +34,14 @@
           };
         };
         default = rootkin;
+      });
+
+      # `nix flake check`: the whole test suite
+      checks = forAll (pkgs: {
+        tests = self.packages.${pkgs.stdenv.hostPlatform.system}.rootkin.overrideAttrs {
+          doCheck = true;
+          cargoTestFlags = [ "--workspace" ];
+        };
       });
 
       devShells = forAll (pkgs: {
