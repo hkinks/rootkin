@@ -142,3 +142,40 @@ fn citing_a_source_from_an_event() {
     assert_eq!(h.state().tree.citation_count(&id), before + 1);
     h.get_by_label_contains("Unsaved changes");
 }
+
+const SMALL_GED: &str = "0 HEAD\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Ada /Test/\n0 TRLR\n";
+
+fn temp_ged(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("rootkin-test-{}-{name}.ged", std::process::id()));
+    std::fs::write(&path, SMALL_GED).unwrap();
+    path
+}
+
+#[test]
+fn import_asks_before_replacing_unsaved_changes() {
+    let path = temp_ged("guard");
+    let mut h = harness();
+    h.get_all_by_label("Leo Lindqvist  b. 1979").next().unwrap().click();
+    h.run_steps(3);
+    h.get_by_label("Make home person").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Unsaved changes");
+
+    h.state_mut().request_import(path.clone());
+    h.run_steps(3);
+    h.get_by_label("Save your changes?");
+    assert!(h.state().tree.people.len() > 1, "tree must not be replaced yet");
+
+    // Cancel keeps the current tree
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().tree.people.len() > 1);
+
+    // Don't save goes on with the import
+    h.state_mut().request_import(path.clone());
+    h.run_steps(3);
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+    assert_eq!(h.state().tree.people.len(), 1);
+    let _ = std::fs::remove_file(path);
+}

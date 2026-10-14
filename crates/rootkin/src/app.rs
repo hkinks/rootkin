@@ -69,6 +69,7 @@ pub struct App {
 enum Pending {
     Close,
     Open(PathBuf),
+    Import(PathBuf),
     New,
 }
 
@@ -178,6 +179,7 @@ impl App {
         match self.pending.take() {
             Some(Pending::Close) => self.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Some(Pending::Open(path)) => self.start_open(path),
+            Some(Pending::Import(path)) => self.start_import(path),
             Some(Pending::New) => self.new_tree(),
             None => {}
         }
@@ -849,6 +851,7 @@ impl App {
 
     // ------------------------------------------------------------ import/export
 
+    /// Pick a file, then import it once unsaved changes are dealt with.
     fn import(&mut self, ctx: &egui::Context) {
         let _ = ctx;
         let Some(path) =
@@ -856,12 +859,16 @@ impl App {
         else {
             return;
         };
+        self.request_import(path);
+    }
+
+    pub(crate) fn request_import(&mut self, path: PathBuf) {
+        self.guarded(Pending::Import(path));
+    }
+
+    fn start_import(&mut self, path: PathBuf) {
         match crate::formats::import(&path) {
             Ok((pkg, report)) => {
-                self.flush_form();
-                if self.dirty() {
-                    self.toasts.info("Your previous tree had unsaved changes; it is still on disk unchanged");
-                }
                 self.load(pkg, None);
                 self.saved_version = u64::MAX;
                 self.toasts.info(format!("Imported {}. Save it as a .familyx file to keep it.", report));
