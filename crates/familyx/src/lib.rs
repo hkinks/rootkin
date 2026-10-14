@@ -10,6 +10,7 @@ pub mod date;
 pub mod doc;
 pub mod edit;
 mod lds_temples;
+pub mod litedb;
 pub mod migrate;
 pub mod model;
 pub mod package;
