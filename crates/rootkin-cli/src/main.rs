@@ -1,7 +1,5 @@
 //! Rootkin command-line tool for `.familyx` files.
 
-mod example;
-
 use anyhow::{bail, Context, Result};
 use familyx::{codec, model::Tree, Package};
 
@@ -58,7 +56,7 @@ fn main() -> Result<()> {
             );
         }
         ["example", out] => {
-            let pkg = example::build()?;
+            let pkg = rootkin_formats::example::build().map_err(|e| anyhow::anyhow!("{e}"))?;
             let problems = familyx::edit::check(&pkg.doc);
             if !problems.is_empty() {
                 bail!("generated tree is inconsistent: {problems:?}");

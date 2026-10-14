@@ -7,6 +7,7 @@
 mod ansel;
 mod archive;
 mod dates;
+pub mod example;
 mod families;
 pub mod gedcom;
 pub mod gramps;

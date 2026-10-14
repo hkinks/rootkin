@@ -94,3 +94,24 @@ fn a_clean_file_has_an_empty_report() {
     assert!(r.left_out.is_empty() && r.duplicates.is_empty() && r.broken_links.is_empty() && r.warnings.is_empty());
     assert_eq!(r.tree_name, None);
 }
+
+#[test]
+fn impossible_dates_are_reported_and_year_ranges_kept() {
+    let text = concat!(
+        "0 HEAD\n0 @I1@ INDI\n1 NAME Ott /Ilves/\n1 BIRT\n2 DATE 31 FEB 1850\n",
+        "1 DEAT\n2 DATE 1899-1900\n0 @I2@ INDI\n1 NAME Mari /Tamm/\n1 BIRT\n2 DATE 1950s\n0 TRLR\n"
+    );
+    let (pkg, report) = import(text.as_bytes(), Format::Gedcom).unwrap();
+    let wrong = group(&report, "Things that looked wrong in the file");
+    assert_eq!(wrong.count, 1);
+    assert!(wrong.items[0].contains("31 FEB 1850") && wrong.items[0].contains("does not exist"), "{:?}", wrong.items);
+
+    let tree = familyx::model::Tree::from_doc(&pkg.doc);
+    let ott = tree.people.iter().find(|p| p.display_name() == "Ott Ilves").unwrap();
+    let birth = &ott.fact("BIRT").unwrap().date;
+    assert_eq!((birth.descriptor.as_str(), birth.text.as_str()), ("TextOnly", "31 FEB 1850"));
+    let death = &ott.fact("DEAT").unwrap().date;
+    assert_eq!((death.descriptor.as_str(), death.year, death.end_year), ("Range", Some(1899), Some(1900)));
+    let mari = tree.people.iter().find(|p| p.display_name() == "Mari Tamm").unwrap();
+    assert_eq!(mari.fact("BIRT").unwrap().date.display(), "1950s");
+}

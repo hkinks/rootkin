@@ -18,7 +18,12 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 - [x] M7 Symbols the default fonts can't draw
 - [x] M1 Save as suggests the tree or file name; "Imported from ..., not saved yet" in the menu bar
 - [x] M4 Ancestry "Living" placeholders
-- [ ] M2, M3, M5, M6, M8 and Low items, see the review
+- [x] M2 Older-file conversion notice in plain words; "Converted, not saved yet"
+- [x] M3 Plain-language error dialogs
+- [x] M5 Sensible default gender for new partner/parent; no lone "?" in tree boxes
+- [x] M6 Dates: decades, localized month names, ambiguous numeric dates, impossible GEDCOM dates
+- [x] M8 People list: sort by birth year within a name, surname groups, fast for 20,000 people
+- [x] Low: recent files layout, collapsible person panel, "Try the example tree"
 
 ## Next steps
 

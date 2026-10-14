@@ -3003,7 +3003,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "familyx",
- "image",
  "rootkin-formats",
 ]
 
@@ -3014,6 +3013,7 @@ dependencies = [
  "chrono",
  "familyx",
  "flate2",
+ "image",
  "thiserror 2.0.21",
  "unicode-normalization",
  "zip",

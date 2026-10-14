@@ -7,6 +7,7 @@ use familyx::edit::{self, EditResult};
 use familyx::model::{Id, Person, Tree};
 use familyx::Package;
 
+use crate::people_list::SortBy;
 use crate::person_panel::PersonForm;
 use crate::photos::PhotoCache;
 use crate::relation_dialog::RelationDialog;
@@ -25,13 +26,6 @@ enum Job {
     Saved(PathBuf, u64, Result<(), String>),
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum SortBy {
-    Surname,
-    GivenName,
-    Birth,
-}
-
 pub struct App {
     ctx: egui::Context,
     pub(crate) path: Option<PathBuf>,
@@ -41,9 +35,13 @@ pub struct App {
     pub(crate) selected: Option<Id>,
     history: Vec<Id>,
     future: Vec<Id>,
-    search: String,
-    sort_by: SortBy,
-    living_only: bool,
+    pub(crate) search: String,
+    pub(crate) sort_by: SortBy,
+    pub(crate) living_only: bool,
+    pub(crate) list_cache: crate::people_list::ListCache,
+    pub(crate) list_jump: Option<usize>,
+    /// Bumped whenever `tree` is rebuilt; the people list caches against it.
+    pub(crate) tree_epoch: u64,
     pub(crate) photos: PhotoCache,
     tree_view: TreeView,
     pub(crate) form: Option<PersonForm>,
@@ -60,9 +58,11 @@ pub struct App {
     pending: Option<Pending>,
     busy: Option<String>,
     jobs: (mpsc::Sender<Job>, mpsc::Receiver<Job>),
-    recent: Vec<PathBuf>,
+    pub(crate) recent: Vec<PathBuf>,
+    /// The person panel on the right; hide it to give the tree the room.
+    pub(crate) show_person_panel: bool,
     pub(crate) toasts: Toasts,
-    error_dialog: Option<String>,
+    pub(crate) error_dialog: Option<crate::problems::Problem>,
     /// An informational message shown in a dialog (e.g. after converting an old file).
     notice: Option<String>,
     show_about: bool,
@@ -75,6 +75,8 @@ pub struct App {
     import_into: Option<ImportedInto>,
     pub(crate) merge_ui: crate::merge_ui::MergeUi,
     pub(crate) sources_ui: crate::sources::SourcesUi,
+    /// The open tree was converted from an older file and not saved since.
+    pub(crate) converted: bool,
 }
 
 /// What "Import into this tree" added, for the summary.
@@ -105,6 +107,9 @@ impl App {
             search: String::new(),
             sort_by: SortBy::Surname,
             living_only: false,
+            list_cache: Default::default(),
+            list_jump: None,
+            tree_epoch: 0,
             photos: PhotoCache::default(),
             tree_view: TreeView::default(),
             form: None,
@@ -120,6 +125,7 @@ impl App {
             busy: None,
             jobs: mpsc::channel(),
             recent: crate::recent::load(),
+            show_person_panel: true,
             toasts: Toasts::default(),
             error_dialog: None,
             notice: None,
@@ -129,6 +135,7 @@ impl App {
             import_into: None,
             merge_ui: Default::default(),
             sources_ui: crate::sources::SourcesUi::default(),
+            converted: false,
         };
         if let Some(path) = path {
             app.start_open(path);
@@ -149,7 +156,7 @@ impl App {
 
     /// Opening and saving derive keys with 210k PBKDF2 rounds; run them off
     /// the UI thread.
-    fn start_open(&mut self, path: PathBuf) {
+    pub(crate) fn start_open(&mut self, path: PathBuf) {
         let tx = self.jobs.0.clone();
         self.busy = Some(format!("Opening {}…", file_name(&path)));
         std::thread::spawn(move || {
@@ -181,10 +188,16 @@ impl App {
             match job {
                 Job::Opened(path, Ok(pkg)) => {
                     self.notice = migration_notice(&pkg);
+                    let converted = self.notice.is_some();
                     self.load(pkg, Some(path));
+                    if converted {
+                        // the converted tree only exists in memory until the first save
+                        self.converted = true;
+                        self.saved_version = u64::MAX;
+                    }
                 }
                 Job::Opened(path, Err(e)) => {
-                    self.error_dialog = Some(format!("Could not open {}:\n\n{e}", path.display()));
+                    self.error_dialog = Some(crate::problems::cannot_open(&path, &e));
                 }
                 Job::Imported(path, Ok((pkg, summary))) => {
                     self.load(pkg, None);
@@ -195,10 +208,11 @@ impl App {
                 }
                 Job::ImportedInto(path, Ok((other, summary))) => self.finish_import_into(&path, other, summary),
                 Job::Imported(path, Err(e)) | Job::ImportedInto(path, Err(e)) => {
-                    self.error_dialog = Some(format!("Could not import {}:\n\n{e}", path.display()));
+                    self.error_dialog = Some(crate::problems::cannot_import(&path, &e));
                 }
                 Job::Saved(path, version, Ok(())) => {
                     self.saved_version = version;
+                    self.converted = false;
                     crate::recent::remember(&mut self.recent, &path);
                     self.toasts.info(format!("Saved {}. The previous version is kept as .bak", file_name(&path)));
                     self.path = Some(path);
@@ -206,8 +220,7 @@ impl App {
                 }
                 Job::Saved(path, _, Err(e)) => {
                     self.pending = None;
-                    self.error_dialog =
-                        Some(format!("Could not save {}:\n\n{e}\n\nYour changes are still open here.", path.display()));
+                    self.error_dialog = Some(crate::problems::cannot_save(&path, &e));
                 }
             }
         }
@@ -226,6 +239,7 @@ impl App {
 
     pub(crate) fn load(&mut self, pkg: Package, path: Option<PathBuf>) {
         self.tree = Tree::from_doc(&pkg.doc);
+        self.tree_epoch += 1;
         self.selected = self.tree.home_person.clone().or_else(|| self.tree.people.first().map(|p| p.id.clone()));
         self.history.clear();
         self.future.clear();
@@ -237,6 +251,7 @@ impl App {
         self.imported_from = None;
         self.import_into = None;
         self.merge_ui = Default::default();
+        self.converted = false;
         self.version = 0;
         self.saved_version = if path.is_some() { 0 } else { u64::MAX };
         self.tree_view.fit_now();
@@ -245,6 +260,17 @@ impl App {
             self.toasts.info(format!("Opened {} ({} people)", file_name(path), self.tree.people.len()));
         }
         self.path = path;
+    }
+
+    /// The made-up example family, as a new tree that is not saved yet.
+    fn try_example(&mut self) {
+        match rootkin_formats::example::build() {
+            Ok(pkg) => {
+                self.load(pkg, None);
+                self.toasts.info("This is a made-up family. Use Save as if you want to keep it.");
+            }
+            Err(e) => self.toasts.error(format!("Could not make the example tree: {e}")),
+        }
     }
 
     fn new_tree(&mut self) {
@@ -424,6 +450,7 @@ impl App {
     fn after_change(&mut self) {
         let Some(pkg) = &self.pkg else { return };
         self.tree = Tree::from_doc(&pkg.doc);
+        self.tree_epoch += 1;
         self.version += 1;
         if self.selected.as_deref().is_some_and(|id| self.tree.person(id).is_none()) {
             self.selected = self.history.pop().filter(|id| self.tree.person(id).is_some());
@@ -573,7 +600,7 @@ impl App {
                         ui.weak("No recent files");
                     }
                     for path in self.recent.clone() {
-                        if ui.button(path.display().to_string()).clicked() {
+                        if ui.button(file_name(&path)).on_hover_text(path.display().to_string()).clicked() {
                             self.guarded(Pending::Open(path));
                         }
                     }
@@ -683,6 +710,8 @@ impl App {
                 if ui.add_enabled(self.pkg.is_some(), egui::Button::new("Sources…")).clicked() {
                     self.sources_ui.open = true;
                 }
+                ui.checkbox(&mut self.show_person_panel, "Person panel")
+                    .on_hover_text("Hide it on a small screen to give the tree more room");
                 ui.separator();
                 egui::widgets::global_theme_preference_buttons(ui);
                 ui.label("Text size: Ctrl + / Ctrl −");
@@ -702,12 +731,23 @@ impl App {
                 ui.label("New family tree");
             }
             if self.pkg.is_some() {
-                if self.dirty() {
+                if self.dirty() && self.converted {
+                    ui.label(RichText::new("Converted, not saved yet").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
+                        .on_hover_text("Press Ctrl+S to write the converted file");
+                } else if self.dirty() {
                     ui.label(RichText::new("Unsaved changes").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
                         .on_hover_text("Press Ctrl+S to save");
                 } else {
                     ui.label(RichText::new("✔ All changes saved").color(Color32::from_rgb(0x60, 0xb0, 0x60)));
                 }
+            }
+            if self.pkg.is_some() {
+                let label = if self.show_person_panel { "Hide person panel" } else { "Show person panel" };
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button(label).clicked() {
+                        self.show_person_panel = !self.show_person_panel;
+                    }
+                });
             }
             if let Some(busy) = &self.busy {
                 ui.spinner();
@@ -733,12 +773,25 @@ impl App {
             if ui.add(big("Import GEDCOM or Gramps…")).clicked() {
                 self.import(&ctx);
             }
+            if ui.link("Try the example tree").on_hover_text("A made-up family to look around in").clicked() {
+                self.try_example();
+            }
             if !self.recent.is_empty() {
                 ui.add_space(24.0);
                 ui.label(RichText::new("Recent").strong());
                 for path in self.recent.clone() {
-                    if ui.link(path.display().to_string()).clicked() {
-                        self.start_open(path);
+                    ui.add_space(4.0);
+                    if ui
+                        .link(RichText::new(file_name(&path)).strong())
+                        .on_hover_text(path.display().to_string())
+                        .clicked()
+                    {
+                        self.start_open(path.clone());
+                    }
+                    let folder = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+                    ui.label(RichText::new(folder).weak().small());
+                    if ui.small_button("Remove from list").clicked() {
+                        crate::recent::forget(&mut self.recent, &path);
                     }
                 }
             }
@@ -760,69 +813,6 @@ impl App {
                 self.relation_dialog = Some(RelationDialog::new_unrelated());
             }
         });
-    }
-
-    fn people_list(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.search)
-                    .hint_text("Search names, places, years…")
-                    .desired_width(ui.available_width() - 28.0),
-            );
-            if !self.search.is_empty() && ui.small_button("✖").on_hover_text("Clear search").clicked() {
-                self.search.clear();
-            }
-        });
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("sort")
-                .selected_text(match self.sort_by {
-                    SortBy::Surname => "Sort: surname",
-                    SortBy::GivenName => "Sort: first name",
-                    SortBy::Birth => "Sort: birth year",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.sort_by, SortBy::Surname, "Surname");
-                    ui.selectable_value(&mut self.sort_by, SortBy::GivenName, "First name");
-                    ui.selectable_value(&mut self.sort_by, SortBy::Birth, "Birth year");
-                });
-            ui.checkbox(&mut self.living_only, "Living only");
-        });
-
-        let needle = self.search.to_lowercase();
-        let matches = |p: &Person| {
-            needle.is_empty()
-                || p.names.iter().any(|n| n.display().to_lowercase().contains(&needle))
-                || p.facts
-                    .iter()
-                    .any(|f| f.place.to_lowercase().contains(&needle) || f.date.display().contains(&needle))
-        };
-        let mut people: Vec<&Person> =
-            self.tree.people.iter().filter(|p| (!self.living_only || p.is_living) && matches(p)).collect();
-        match self.sort_by {
-            SortBy::Surname => people.sort_by_cached_key(|p| sort_key(p)),
-            SortBy::GivenName => people.sort_by_cached_key(|p| {
-                let (unnamed, s, g) = sort_key(p);
-                (unnamed, g, s)
-            }),
-            SortBy::Birth => people
-                .sort_by_cached_key(|p| (p.fact("BIRT").and_then(|f| f.date.year).unwrap_or(i32::MAX), sort_key(p))),
-        }
-        ui.weak(format!("{} of {} people", people.len(), self.tree.people.len()));
-        ui.separator();
-
-        let mut clicked = None;
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for p in people {
-                let is_selected = self.selected.as_deref() == Some(p.id.as_str());
-                let label = format!("{}  {}", p.display_name(), p.lifespan());
-                if ui.selectable_label(is_selected, label).clicked() {
-                    clicked = Some(p.id.clone());
-                }
-            }
-        });
-        if let Some(id) = clicked {
-            self.select(&id);
-        }
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -871,14 +861,38 @@ impl App {
             }
         }
 
-        if let Some(msg) = self.error_dialog.clone() {
+        if let Some(problem) = self.error_dialog.clone() {
+            let mut import = false;
+            let mut close = false;
             egui::Modal::new(egui::Id::new("error")).show(ctx, |ui| {
-                ui.heading(RichText::new("Something went wrong").color(Color32::LIGHT_RED));
-                ui.label(msg);
-                if ui.button("OK").clicked() {
-                    self.error_dialog = None;
-                }
+                ui.set_max_width(480.0);
+                ui.heading(RichText::new(&problem.heading).color(Color32::LIGHT_RED));
+                ui.label(&problem.message);
+                ui.add_space(4.0);
+                ui.label(RichText::new(file_name(&problem.path)).strong())
+                    .on_hover_text(problem.path.display().to_string());
+                egui::CollapsingHeader::new("Details").show(ui, |ui| {
+                    ui.label(RichText::new(problem.path.display().to_string()).monospace());
+                    if !problem.details.is_empty() {
+                        ui.label(RichText::new(&problem.details).monospace());
+                    }
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if problem.offer_import && ui.button(RichText::new("Import").strong()).clicked() {
+                        import = true;
+                    }
+                    if ui.button("OK").clicked() {
+                        close = true;
+                    }
+                });
             });
+            if import {
+                self.error_dialog = None;
+                self.request_import(problem.path);
+            } else if close {
+                self.error_dialog = None;
+            }
         }
 
         if let Some(msg) = self.notice.clone() {
@@ -1131,16 +1145,27 @@ impl App {
 
 /// What to tell the user about a file converted from an older app version.
 fn migration_notice(pkg: &Package) -> Option<String> {
-    let report = pkg.migration()?;
-    let mut msg = format!(
-        "This file was made by an older version of My Family Tree (format {}). Rootkin converted it \
-         to the current format: {} relationships and {} photos were carried over.\n\n\
-         Saving writes the current format; your original file is kept next to it as .bak.",
-        if report.from_version.is_empty() { "unknown" } else { &report.from_version },
-        report.spouse_links + report.parent_links,
-        report.media,
+    Some(migration_text(pkg.migration()?))
+}
+
+fn migration_text(report: &familyx::migrate::Report) -> String {
+    let app12 = report.from_version == familyx::migrate::schema14::APP12_VERSION;
+    let origin =
+        if app12 { "an older version of My Family Tree (version 12)" } else { "an older version of My Family Tree" };
+    let mut msg = format!("This file was made by {origin}. Rootkin converted it to the current format.");
+    let counts: Vec<String> = [(report.spouse_links + report.parent_links, "relationship"), (report.media, "photo")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}{}", if n == 1 { "" } else { "s" }))
+        .collect();
+    if !counts.is_empty() {
+        msg.push_str(&format!(" {} were carried over.", counts.join(" and ")));
+    }
+    msg.push_str(
+        "\n\nNothing has been written yet. Saving writes the current format; your original file is kept \
+         next to it as .bak.",
     );
-    if report.from_version == familyx::migrate::schema14::APP12_VERSION {
+    if app12 {
         msg.push_str("\n\nTo keep using the tree in My Family Tree 12, use File > Save a copy for My Family Tree 12…");
     }
     if !report.dropped.is_empty() {
@@ -1153,7 +1178,7 @@ fn migration_notice(pkg: &Package) -> Option<String> {
             report.warnings.join("; ")
         ));
     }
-    Some(msg)
+    msg
 }
 
 pub(crate) fn file_name(path: &Path) -> String {
@@ -1181,7 +1206,11 @@ impl eframe::App for App {
             egui::CentralPanel::default().show(ui, |ui| self.welcome(ui)).response.rect
         } else {
             egui::Panel::left("people").default_size(270.0).show(ui, |ui| self.people_list(ui));
-            egui::Panel::right("person").default_size(400.0).show(ui, |ui| self.person_panel(ui));
+            if self.show_person_panel {
+                // on a narrow window the panel takes less so the tree isn't squeezed
+                let width = (ui.ctx().content_rect().width() * 0.3).clamp(280.0, 400.0);
+                egui::Panel::right("person").default_size(width).show(ui, |ui| self.person_panel(ui));
+            }
             let panel = egui::CentralPanel::default().show(ui, |ui| {
                 if self.tree.people.is_empty() {
                     self.empty_tree(ui);
@@ -1245,5 +1274,31 @@ fn import_report_sections(ui: &mut egui::Ui, report: &crate::formats::ImportRepo
                 ui.label(RichText::new(w).monospace());
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_notice_mentions_only_meaningful_counts() {
+        let mut report = familyx::migrate::Report { from_version: "14.4".into(), ..Default::default() };
+        let msg = migration_text(&report);
+        assert!(msg.contains("an older version of My Family Tree (version 12)"));
+        assert!(!msg.contains("14.4") && !msg.contains("format 1"), "{msg}");
+        assert!(!msg.contains("carried over") && !msg.contains(" 0 "), "{msg}");
+
+        report.spouse_links = 2;
+        report.parent_links = 3;
+        let msg = migration_text(&report);
+        assert!(msg.contains("5 relationships were carried over"), "{msg}");
+
+        report.media = 1;
+        report.from_version = "9.0".into();
+        let msg = migration_text(&report);
+        assert!(msg.contains("5 relationships and 1 photo were carried over"), "{msg}");
+        assert!(msg.contains("an older version of My Family Tree."), "{msg}");
+        assert!(!msg.contains("version 12"), "{msg}");
     }
 }

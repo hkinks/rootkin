@@ -593,6 +593,12 @@ impl Importer<'_> {
             match c.tag.as_str() {
                 "DATE" => {
                     let mut date = DateValue::from_gedcom(&c.value);
+                    if date.impossible {
+                        self.warnings.push(format!(
+                            "{path}: the date \"{}\" does not exist; it is kept as text",
+                            c.value.trim()
+                        ));
+                    }
                     // GEDCOM 7: the words the submitter wrote for the date
                     if let Some(phrase) = c.child_value("PHRASE") {
                         if date.is_empty() || !date.text.is_empty() {

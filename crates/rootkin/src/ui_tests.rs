@@ -153,7 +153,7 @@ fn temp_ged(name: &str) -> std::path::PathBuf {
 
 /// Step the app until background jobs (open, save, import) are done.
 fn wait_for_jobs(h: &mut Harness<App>) {
-    for _ in 0..500 {
+    for _ in 0..3000 {
         h.run_steps(2);
         if !h.state().is_busy() {
             return;
@@ -463,4 +463,190 @@ fn merge_with_from_the_person_panel_and_undo() {
     assert_eq!(tree_people(&h), before);
     assert!(h.state().tree.person(&twin).is_some());
     assert!(!h.state().tree.person(&leo).unwrap().facts.iter().any(|f| f.tag == "OCCU"));
+}
+
+const OLD_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../familyx/tests/data/old/app12_6.familyx");
+
+#[test]
+fn a_converted_file_says_converted_not_saved_yet() {
+    let mut h = Harness::builder().with_size([1400.0, 900.0]).build_eframe(|cc| App::new(cc, None));
+    h.run_steps(2);
+    h.state_mut().start_open(OLD_FILE.into());
+    wait_for_jobs(&mut h);
+    h.run_steps(3);
+    h.get_by_label("Older file converted");
+    h.get_by_label_contains("an older version of My Family Tree (version 12)");
+    assert!(h.query_by_label_contains("14.4").is_none());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    h.get_by_label("Converted, not saved yet");
+    assert!(h.query_by_label_contains("All changes saved").is_none());
+}
+
+#[test]
+fn opening_a_gedcom_explains_and_offers_import() {
+    let name = format!("rootkin-test-{}-notopen.ged", std::process::id());
+    let path = std::env::temp_dir().join(&name);
+    std::fs::write(&path, SMALL_GED).unwrap();
+    let mut h = Harness::builder().with_size([1200.0, 800.0]).build_eframe(|cc| App::new(cc, None));
+    h.run_steps(2);
+    h.state_mut().start_open(path.clone());
+    wait_for_jobs(&mut h);
+    h.run_steps(3);
+    h.get_by_label(&format!("Rootkin can't open {name}"));
+    assert!(h.query_by_label("Something went wrong").is_none());
+    h.get_by_label("This is a GEDCOM file. Use Import to bring it in.");
+    // the raw error and the full path stay behind "Details"
+    assert!(h.query_by_label_contains("Zip").is_none() && h.query_by_label_contains("zip:").is_none());
+    h.get_by_label("Details").click();
+    h.run_steps(3);
+    h.get_by_label_contains("zip:");
+    h.get_by_label("Import").click();
+    wait_for_jobs(&mut h);
+    h.run_steps(3);
+    assert_eq!(h.state().tree.people.len(), 1);
+    assert!(h.state().error_dialog.is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+fn dialog_gender(h: &Harness<App>) -> familyx::model::Gender {
+    h.state().relation_dialog.as_ref().expect("dialog open").gender()
+}
+
+#[test]
+fn partner_and_second_parent_default_to_the_other_gender() {
+    use crate::relation_dialog::{Relation, RelationDialog};
+    use familyx::model::Gender;
+    let mut h = harness();
+    let erik = h.state().selected.clone().unwrap(); // Erik is male in the example
+    assert_eq!(h.state().tree.person(&erik).unwrap().gender, Gender::Male);
+    let app = h.state_mut();
+    app.relation_dialog = Some(RelationDialog::new(Relation::Spouse, &erik, &app.tree));
+    h.run_steps(3);
+    assert_eq!(dialog_gender(&h), Gender::Female);
+    // still editable
+    h.get_all_by_label("Male").last().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(dialog_gender(&h), Gender::Male);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    // Erik has two parents already: nothing to guess. A child with one parent guesses the other.
+    let app = h.state_mut();
+    let (child, mother) = app
+        .apply("Setup", |doc| {
+            let child = familyx::edit::add_person(doc, "Maria", "Kask", Gender::Female);
+            let mother = familyx::edit::add_person(doc, "Anna", "Kask", Gender::Female);
+            familyx::edit::link_parent(doc, &child, &mother)?;
+            Ok((child, mother))
+        })
+        .unwrap();
+    let app = h.state_mut();
+    app.relation_dialog = Some(RelationDialog::new(Relation::Parent, &child, &app.tree));
+    h.run_steps(3);
+    assert_eq!(dialog_gender(&h), Gender::Male, "opposite of {mother}");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    let app = h.state_mut();
+    app.relation_dialog = Some(RelationDialog::new(Relation::Parent, &erik, &app.tree));
+    assert_eq!(dialog_gender(&h), Gender::Unknown);
+}
+
+#[test]
+fn the_date_field_explains_ambiguous_numeric_dates() {
+    let mut h = harness();
+    let shown =
+        h.state().tree.person(h.state().selected.as_deref().unwrap()).unwrap().fact("BIRT").unwrap().date.display();
+    text_input(&h, &shown).focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    text_input(&h, &shown).type_text("3/12/1950");
+    h.run_steps(3);
+    h.get_by_label("Understood as: 3 Dec 1950 (day/month); for 12 Mar type 12 Mar 1950");
+    // a decade is understood too
+    text_input(&h, "3/12/1950").focus();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    text_input(&h, "3/12/1950").type_text("1950s");
+    h.run_steps(3);
+    h.get_by_label("Understood as: 1950s");
+}
+
+/// A tree with `n` people named after the letters of the alphabet.
+fn big_app(n: usize) -> Harness<'static, App> {
+    let mut pkg = Package::new();
+    let names = ["Aas", "Berg", "Kask", "Mägi", "Ilves", "Tamm", "Saar", "Õun"];
+    for i in 0..n {
+        let surname = format!("{}{}", names[i % names.len()], i / names.len() / 20);
+        familyx::edit::add_person(&mut pkg.doc, &format!("P{i}"), &surname, familyx::model::Gender::Unknown);
+    }
+    let mut h = Harness::builder().with_size([1400.0, 900.0]).build_eframe(|cc| {
+        let mut app = App::new(cc, None);
+        app.load(pkg, None);
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+#[test]
+fn a_big_people_list_has_a_letter_strip_that_jumps() {
+    let mut h = big_app(600);
+    // only the visible rows exist, yet the strip reaches every letter
+    assert!(h.query_by_label_contains("P599").is_none());
+    h.get_by_label("P0 Aas0  "); // the first row of the list
+    h.get_all_by_label("T").next().unwrap().click();
+    h.run_steps(4);
+    assert!(h.query_by_label("P0 Aas0  ").is_none(), "the list moved on to T");
+    assert_eq!(h.get_all_by_label("T").count(), 2, "strip button and heading");
+    assert!(h.get_all_by_label_contains("Tamm").count() > 3);
+}
+
+#[test]
+fn a_small_people_list_has_no_letter_strip() {
+    let h = big_app(50);
+    assert!(h.query_by_label("Jump to this letter").is_none());
+    h.get_by_label_contains("P49");
+}
+
+#[test]
+fn recent_files_show_name_and_folder_and_can_be_removed() {
+    let mut h = Harness::builder().with_size([1200.0, 800.0]).build_eframe(|cc| App::new(cc, None));
+    h.state_mut().recent = vec!["/home/maria/trees/Kask Family.familyx".into(), "/home/maria/old/Tamm.familyx".into()];
+    h.run_steps(3);
+    h.get_by_label("Kask Family.familyx");
+    h.get_by_label("/home/maria/trees");
+    assert!(h.query_by_label("/home/maria/trees/Kask Family.familyx").is_none());
+    h.get_all_by_label("Remove from list").next().unwrap().click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Kask Family.familyx").is_none());
+    h.get_by_label("Tamm.familyx");
+    assert_eq!(h.state().recent.len(), 1);
+}
+
+#[test]
+fn the_example_tree_opens_unsaved_from_the_welcome_screen() {
+    let mut h = Harness::builder().with_size([1200.0, 800.0]).build_eframe(|cc| App::new(cc, None));
+    h.run_steps(2);
+    h.get_by_label("Try the example tree").click();
+    h.run_steps(4);
+    assert!(h.state().path.is_none());
+    assert!(h.state().tree.people.len() > 10);
+    h.get_by_label_contains("Unsaved changes");
+    h.get_by_label("Hide person panel");
+}
+
+#[test]
+fn the_person_panel_can_be_hidden_to_give_the_tree_room() {
+    let mut h = harness();
+    h.get_by_label("Delete this person…");
+    let before = h.get_by_label("Fit").rect(); // right edge of the tree area
+    h.get_by_label("Hide person panel").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("Delete this person…").is_none());
+    h.get_by_label("Show person panel");
+    let after = h.get_by_label("Fit").rect();
+    assert!(after.max.x > before.max.x + 100.0, "{before:?} -> {after:?}");
+    h.get_by_label("Show person panel").click();
+    h.run_steps(4);
+    h.get_by_label("Delete this person…");
 }

@@ -54,7 +54,18 @@ impl RelationDialog {
     pub fn new(relation: Relation, anchor: &str, tree: &Tree) -> Self {
         let anchor_surname = tree.person(anchor).and_then(|p| p.primary_name()).map(|n| n.surname.clone());
         let spouses = tree.spouses(anchor);
+        let gender_of = |id: &str| tree.person(id).map_or(Gender::Unknown, |p| p.gender);
+        // a partner, or a second parent, usually has the other gender
+        let gender = match relation {
+            Relation::Spouse => opposite(gender_of(anchor)),
+            Relation::Parent => match tree.parents(anchor)[..] {
+                [parent] => opposite(gender_of(parent)),
+                _ => Gender::Unknown,
+            },
+            Relation::Child => Gender::Unknown,
+        };
         RelationDialog {
+            gender,
             relation: Some((relation, anchor.to_string())),
             // children usually share the surname; parents/spouses often don't
             surname: if relation == Relation::Child { anchor_surname.unwrap_or_default() } else { String::new() },
@@ -64,7 +75,21 @@ impl RelationDialog {
     }
 }
 
+/// The usual other gender of a partner or second parent; unknown when unsure.
+pub(crate) fn opposite(g: Gender) -> Gender {
+    match g {
+        Gender::Male => Gender::Female,
+        Gender::Female => Gender::Male,
+        _ => Gender::Unknown,
+    }
+}
+
 impl RelationDialog {
+    #[cfg(test)]
+    pub(crate) fn gender(&self) -> Gender {
+        self.gender
+    }
+
     /// Preselect the other parent of a new child.
     pub fn set_co_parent(&mut self, co_parent: Option<Id>) {
         self.co_parent = co_parent;

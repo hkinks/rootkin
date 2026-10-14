@@ -1,8 +1,8 @@
-//! Generates a fictional family tree used as the test fixture.
+//! Generates a fictional family tree: the test fixture and the "Try the example tree" in the app.
 
 use std::io::Cursor;
 
-use anyhow::Result;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 use familyx::doc::Document;
 use familyx::edit::{self, FactInput, SourceInput};
 use familyx::model::{Date, Gender, Id};
@@ -211,7 +211,7 @@ pub fn build() -> Result<Package> {
     )?;
     let fact_of = |doc: &Document, person: &Id, tag: &str| -> Result<Id> {
         let tree = familyx::model::Tree::from_doc(doc);
-        let fact = tree.person(person).and_then(|p| p.fact(tag)).ok_or_else(|| anyhow::anyhow!("no {tag} fact"))?;
+        let fact = tree.person(person).and_then(|p| p.fact(tag)).ok_or_else(|| format!("no {tag} fact"))?;
         Ok(fact.id.clone())
     };
     let birth = fact_of(b.doc, &arthur, "BIRT")?;
@@ -227,4 +227,14 @@ pub fn build() -> Result<Package> {
     pkg.add_photo(&liis, portrait([170, 80, 110])?, "png", "liis wedding.png")?;
     pkg.add_photo(&arthur, portrait([120, 120, 120])?, "png", "arthur.png")?;
     Ok(pkg)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_example_family_is_consistent() {
+        let pkg = super::build().unwrap();
+        assert!(familyx::edit::check(&pkg.doc).is_empty());
+        assert!(familyx::model::Tree::from_doc(&pkg.doc).people.len() > 10);
+    }
 }

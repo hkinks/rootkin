@@ -326,7 +326,10 @@ fn fact_editor(
                 ui.colored_label(Color32::from_rgb(0xff, 0x80, 0x80), format!("⚠ {e} (not saved yet)"));
             }
             Ok(d) if r.has_focus() && !d.is_empty() => {
-                ui.weak(format!("Understood as: {}", d.display()));
+                match Date::ambiguity_hint(&form.date) {
+                    Some(hint) => ui.weak(format!("Understood as: {hint}")),
+                    None => ui.weak(format!("Understood as: {}", d.display())),
+                };
             }
             _ => {}
         }
@@ -380,7 +383,10 @@ impl App {
                 }
                 ui.vertical(|ui| {
                     ui.heading(person.display_name());
-                    ui.label(format!("{} {}", gender_symbol(person.gender), person.lifespan()));
+                    let line = format!("{} {}", gender_symbol(person.gender), person.lifespan());
+                    if !line.trim().is_empty() {
+                        ui.label(line.trim());
+                    }
                     if self.tree.home_person.as_deref() == Some(person.id.as_str()) {
                         ui.weak("Home person (the tree opens here)");
                     } else if ui
