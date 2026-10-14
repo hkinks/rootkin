@@ -744,7 +744,7 @@ impl App {
             if self.pkg.is_some() {
                 let label = if self.show_person_panel { "Hide person panel" } else { "Show person panel" };
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button(label).clicked() {
+                    if crate::small_button(ui, label).clicked() {
                         self.show_person_panel = !self.show_person_panel;
                     }
                 });
@@ -790,7 +790,7 @@ impl App {
                     }
                     let folder = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
                     ui.label(RichText::new(folder).weak().small());
-                    if ui.small_button("Remove from list").clicked() {
+                    if crate::small_button(ui, "Remove from list").clicked() {
                         crate::recent::forget(&mut self.recent, &path);
                     }
                 }

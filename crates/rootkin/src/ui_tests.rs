@@ -650,3 +650,37 @@ fn the_person_panel_can_be_hidden_to_give_the_tree_room() {
     h.run_steps(4);
     h.get_by_label("Delete this person…");
 }
+
+#[test]
+fn hovering_a_button_moves_nothing() {
+    use egui_kittest::kittest::NodeT;
+    /// Labelled widgets with a unique label, and where they are.
+    fn rects(h: &Harness<App>) -> Vec<(String, egui::Rect)> {
+        let all: Vec<(String, egui::Rect)> = h
+            .get_all_by(|n| matches!(n.role(), Role::Button | Role::Label | Role::Link))
+            .filter_map(|n| n.accesskit_node().label().map(|l| (l, n.rect())))
+            .collect();
+        all.iter().filter(|(l, _)| all.iter().filter(|(m, _)| m == l).count() == 1).cloned().collect()
+    }
+    let mut h = harness();
+    h.run_steps(60); // let the tree finish fitting itself
+    let before = rects(&h);
+    let buttons: Vec<(String, egui::Rect)> = h
+        .get_all_by(|n| n.role() == Role::Button)
+        .filter_map(|n| n.accesskit_node().label().map(|l| (l, n.rect())))
+        .collect();
+    for (label, rect) in buttons {
+        h.hover_at(rect.center());
+        h.run_steps(3);
+        for (l, b) in rects(&h) {
+            if let Some((_, a)) = before.iter().find(|(m, _)| *m == l) {
+                assert!(
+                    (a.min - b.min).length() < 0.5 && (a.size() - b.size()).length() < 0.5,
+                    "hovering {label:?} moved {l:?}: {a:?} -> {b:?}"
+                );
+            }
+        }
+        h.hover_at(egui::pos2(700.0, 450.0));
+        h.run_steps(3);
+    }
+}

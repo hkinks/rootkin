@@ -38,6 +38,16 @@ fn style(ctx: &egui::Context) {
     });
 }
 
+/// A small button whose height doesn't change on hover. egui drops a small
+/// button's vertical padding, so its hover outline would make it 2px taller
+/// and push everything below it down.
+pub(crate) fn small_button<'a>(ui: &mut egui::Ui, atoms: impl egui::IntoAtoms<'a>) -> egui::Response {
+    let widgets = &ui.visuals().widgets;
+    let outline = widgets.hovered.bg_stroke.width.max(widgets.active.bg_stroke.width);
+    let height = ui.text_style_height(&egui::TextStyle::Button) + 2.0 * outline;
+    ui.add(egui::Button::new(atoms).small().min_size(egui::vec2(0.0, height)))
+}
+
 fn icon() -> egui::IconData {
     let img = image::load_from_memory(include_bytes!("../../../assets/rootkin.png")).expect("bundled icon is valid");
     let img = img.to_rgba8();

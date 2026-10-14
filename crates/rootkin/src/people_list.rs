@@ -130,7 +130,7 @@ impl App {
                     .hint_text("Search names, places, years…")
                     .desired_width(ui.available_width() - 28.0),
             );
-            if !self.search.is_empty() && ui.small_button("✖").on_hover_text("Clear search").clicked() {
+            if !self.search.is_empty() && crate::small_button(ui, "✖").on_hover_text("Clear search").clicked() {
                 self.search.clear();
             }
         });
@@ -162,7 +162,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for &(letter, row) in &self.list_cache.letters {
-                    if ui.small_button(letter.to_string()).on_hover_text("Jump to this letter").clicked() {
+                    if crate::small_button(ui, letter.to_string()).on_hover_text("Jump to this letter").clicked() {
                         jump = Some(row);
                     }
                 }

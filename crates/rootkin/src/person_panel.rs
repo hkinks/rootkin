@@ -274,7 +274,7 @@ fn citations_ui(
     for c in forms {
         ui.horizontal(|ui| {
             ui.label(format!("📖 {}", c.source_title));
-            if ui.small_button("✖").on_hover_text("Remove this citation (the source stays)").clicked() {
+            if crate::small_button(ui, "✖").on_hover_text("Remove this citation (the source stays)").clicked() {
                 *action = Some(Action::Uncite(c.id.clone()));
             }
             lost |= ui
@@ -389,8 +389,7 @@ impl App {
                     }
                     if self.tree.home_person.as_deref() == Some(person.id.as_str()) {
                         ui.weak("Home person (the tree opens here)");
-                    } else if ui
-                        .small_button("Make home person")
+                    } else if crate::small_button(ui, "Make home person")
                         .on_hover_text("Open the tree at this person")
                         .clicked()
                     {
@@ -543,7 +542,7 @@ impl App {
                                         action = Some(Action::MainPhoto(media_id.clone()));
                                     }
                                 }
-                                if ui.small_button("Remove").clicked() {
+                                if crate::small_button(ui, "Remove").clicked() {
                                     action = Some(Action::RemovePhoto(media_id.clone()));
                                 }
                             });

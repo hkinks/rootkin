@@ -77,7 +77,7 @@ impl Toasts {
                                 undo = true;
                                 dismiss = Some(i);
                             }
-                            if ui.small_button("✖").on_hover_text("Dismiss").clicked() {
+                            if crate::small_button(ui, "✖").on_hover_text("Dismiss").clicked() {
                                 dismiss = Some(i);
                             }
                         });
