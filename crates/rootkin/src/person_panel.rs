@@ -300,9 +300,44 @@ fn citations_ui(
     lost
 }
 
+/// Hint for an event's description field, or `None` when the event type has
+/// no description (a birth is a date and a place).
+fn details_hint(tag: &str) -> Option<&'static str> {
+    match tag {
+        "OCCU" => Some("occupation, e.g. carpenter"),
+        "EDUC" => Some("school or course"),
+        "GRAD" => Some("degree or school"),
+        "RELI" => Some("religion"),
+        "TITL" => Some("title, e.g. Doctor"),
+        "DSCR" => Some("description"),
+        "BIRT"
+        | "DEAT"
+        | "BURI"
+        | "CREM"
+        | "CHR"
+        | "BAPM"
+        | "RESI"
+        | "ADOP"
+        | "EMIG"
+        | "IMMI"
+        | "NATU"
+        | "RETI"
+        | "CENS"
+        | "ENGA"
+        | "MARB"
+        | "DIV"
+        | "ANUL"
+        | "FACT_ContactAddress" => None,
+        t if t == "MARR" || t.starts_with("MARR_") => None,
+        // custom and other events
+        _ => Some("description"),
+    }
+}
+
 /// Editor for one event; returns (focus lost, remove clicked).
 fn fact_editor(
     ui: &mut egui::Ui,
+    tag: &str,
     label: &str,
     form: &mut FactForm,
     tree: &Tree,
@@ -334,7 +369,12 @@ fn fact_editor(
             _ => {}
         }
         lost |= wide_text(ui, &mut form.place, "place").lost_focus();
-        lost |= wide_text(ui, &mut form.details, "description (e.g. occupation)").lost_focus();
+        // a description only where the event has one (or the file already holds one)
+        match details_hint(tag) {
+            Some(hint) => lost |= wide_text(ui, &mut form.details, hint).lost_focus(),
+            None if !form.details.is_empty() => lost |= wide_text(ui, &mut form.details, "description").lost_focus(),
+            None => {}
+        }
         lost |= ui
             .add(
                 egui::TextEdit::multiline(&mut form.note)
@@ -470,7 +510,7 @@ impl App {
             egui::CollapsingHeader::new(RichText::new("Events").heading()).default_open(true).show(ui, |ui| {
                 for fact in &person.facts {
                     let Some(f) = form.fact(&fact.id) else { continue };
-                    let (lost, delete) = fact_editor(ui, fact.label(), f, &self.tree, &mut action);
+                    let (lost, delete) = fact_editor(ui, &fact.tag, fact.label(), f, &self.tree, &mut action);
                     lost_focus |= lost;
                     if delete {
                         action = Some(Action::DeleteFact(fact.id.clone(), fact.label().to_string()));
@@ -533,11 +573,15 @@ impl App {
                                     let img = egui::Image::new(&tex)
                                         .fit_to_exact_size(egui::vec2(110.0, 110.0))
                                         .maintain_aspect_ratio(true);
-                                    let r = ui.add(egui::Button::image(img).selected(main)).on_hover_text(if main {
+                                    let r = ui.add(egui::Button::image(img).frame(false)).on_hover_text(if main {
                                         "Main photo"
                                     } else {
                                         "Click to make this the main photo"
                                     });
+                                    if main {
+                                        let stroke = egui::Stroke::new(2.0, ui.visuals().strong_text_color());
+                                        ui.painter().rect_stroke(r.rect, 4.0, stroke, egui::StrokeKind::Outside);
+                                    }
                                     if r.clicked() && !main {
                                         action = Some(Action::MainPhoto(media_id.clone()));
                                     }
@@ -688,7 +732,7 @@ impl App {
                 });
                 for fact in &couple.facts {
                     let Some(f) = form.fact(&fact.id) else { continue };
-                    let (lost, delete) = fact_editor(ui, fact.label(), f, tree, action);
+                    let (lost, delete) = fact_editor(ui, &fact.tag, fact.label(), f, tree, action);
                     *lost_focus |= lost;
                     if delete {
                         *action = Some(Action::DeleteFact(fact.id.clone(), fact.label().to_string()));

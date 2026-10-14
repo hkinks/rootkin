@@ -684,3 +684,17 @@ fn hovering_a_button_moves_nothing() {
         h.run_steps(3);
     }
 }
+
+#[test]
+fn adding_another_name_shows_a_row_to_fill_in() {
+    let mut h = harness();
+    let id = h.state().selected.clone().unwrap();
+    let before = h.state().tree.person(&id).unwrap().names.len();
+    h.get_by_label("Other names").click();
+    h.run_steps(3);
+    h.get_by_label("+ Add another name (birth, married, …)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().tree.person(&id).unwrap().names.len(), before + 1);
+    // the new row's type menu is there to pick e.g. Maiden
+    h.get_all_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some("type")).next().expect("type menu");
+}

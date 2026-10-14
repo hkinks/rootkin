@@ -735,16 +735,22 @@ impl App {
                     ui.label(RichText::new("Converted, not saved yet").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
                         .on_hover_text("Press Ctrl+S to write the converted file");
                 } else if self.dirty() {
-                    ui.label(RichText::new("Unsaved changes").color(Color32::from_rgb(0xe0, 0xa0, 0x30)))
-                        .on_hover_text("Press Ctrl+S to save");
+                    ui.label(RichText::new("Unsaved changes").color(Color32::from_rgb(0xe0, 0xa0, 0x30)));
                 } else {
                     ui.label(RichText::new("✔ All changes saved").color(Color32::from_rgb(0x60, 0xb0, 0x60)));
+                }
+                // quick save next to the status
+                if self.dirty()
+                    && self.busy.is_none()
+                    && crate::small_button(ui, "Save now").on_hover_text("Ctrl+S").clicked()
+                {
+                    self.save();
                 }
             }
             if self.pkg.is_some() {
                 let label = if self.show_person_panel { "Hide person panel" } else { "Show person panel" };
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::small_button(ui, label).clicked() {
+                    if panel_toggle(ui, self.show_person_panel, label).on_hover_text(label).clicked() {
                         self.show_person_panel = !self.show_person_panel;
                     }
                 });
@@ -1179,6 +1185,27 @@ fn migration_text(report: &familyx::migrate::Report) -> String {
         ));
     }
     msg
+}
+
+/// A small "side panel" icon: a window outline whose right part is filled
+/// while the panel is shown.
+fn panel_toggle(ui: &mut egui::Ui, shown: bool, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 18.0), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let visuals = ui.style().interact(&response);
+    let frame = rect.shrink2(egui::vec2(2.0, 3.0));
+    let color = visuals.fg_stroke.color;
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 3.0, visuals.weak_bg_fill);
+    }
+    ui.painter().rect_stroke(frame, 2.0, egui::Stroke::new(1.5, color), egui::StrokeKind::Inside);
+    let side = egui::Rect::from_min_max(egui::pos2(frame.right() - 7.0, frame.top()), frame.right_bottom());
+    if shown {
+        ui.painter().rect_filled(side, 2.0, color);
+    } else {
+        ui.painter().vline(side.left(), frame.y_range(), egui::Stroke::new(1.5, color));
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 pub(crate) fn file_name(path: &Path) -> String {

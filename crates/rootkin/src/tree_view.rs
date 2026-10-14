@@ -335,7 +335,7 @@ impl TreeView {
                 let mut s = self.settings;
                 let mut gens = |ui: &mut egui::Ui, label: &str, value: &mut u32| {
                     let before = *value;
-                    ui.add(egui::DragValue::new(value).range(0..=8)).on_hover_text("Number of generations shown");
+                    ui.add(egui::DragValue::new(value).range(0..=30)).on_hover_text("Number of generations shown");
                     ui.label(label);
                     if *value != before {
                         self.auto_fit = true;
