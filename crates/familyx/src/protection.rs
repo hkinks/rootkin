@@ -56,6 +56,16 @@ pub fn default_family_id() -> String {
     hash_password(DEFAULT_PASSWORD)
 }
 
+/// The `FamilyId` of an unprotected tree in the notation of app versions before schema 14.7 (My Family
+/// Tree 12.x): `base64(salt 32) + base64(PBKDF2-SHA256(default password, salt, 10000, 32))`, 88 characters.
+pub fn legacy_default_family_id() -> String {
+    let mut salt = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut salt);
+    let mut hash = [0u8; 32];
+    assert!(pbkdf2("SHA256", &utf16le(DEFAULT_PASSWORD), &salt, 10_000, &mut hash));
+    format!("{}{}", b64(&salt), b64(&hash))
+}
+
 /// Does `password` match the `FamilyId` record?
 pub fn verify_password(password: &str, family_id: &str) -> bool {
     let parts: Vec<&str> = family_id.split('\0').collect();
@@ -160,5 +170,14 @@ mod tests {
         let upgraded = upgrade_legacy_family_id(Some(&legacy_default)).unwrap();
         assert!(!is_protected(Some(&upgraded)));
         assert_ne!(upgraded.split('\0').nth(2), Some(b64(&salt).as_str()));
+    }
+
+    #[test]
+    fn legacy_default_id_is_recognised_as_unprotected() {
+        let legacy = legacy_default_family_id();
+        assert_eq!(legacy.len(), 88);
+        assert!(!legacy.contains('\0'));
+        // the app's (and this crate's) upgrade treats it as the default password
+        assert!(!is_protected(upgrade_legacy_family_id(Some(&legacy)).as_deref()));
     }
 }

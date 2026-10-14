@@ -6,6 +6,7 @@
 *.bak
 *.xml
 !/crates/familyx/tests/data/example.familyx
+!/crates/familyx/tests/data/old/app12_6.familyx
 !/crates/familyx/tests/data/old/plaintext.xml
 !/crates/familyx/tests/data/old/legacy_rel.xml
 !/crates/familyx/tests/data/old/legacy_old.xml

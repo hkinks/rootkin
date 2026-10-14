@@ -3,12 +3,15 @@
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
-use crate::codec::{SourceFormat, PART_NAMES};
+use crate::codec::{AesVersion, SourceFormat, PART_NAMES};
 use crate::doc::{Document, Element};
+use crate::migrate::schema14::{self, Downgrade};
 use crate::model::Id;
 use crate::{codec, edit, migrate, protection, Error, Result};
 
 const FAMILY_PART: &str = "family8";
+/// The container My Family Tree 12.6 writes.
+const APP12_FORMAT: SourceFormat = SourceFormat::Family7(AesVersion::V2);
 const FAMILY_CONTENT_TYPE: &str = "application/vnd.chronoplexsoftware.familyx";
 
 /// An opened `.familyx` file: the decoded tree plus every other part verbatim.
@@ -17,7 +20,7 @@ const FAMILY_CONTENT_TYPE: &str = "application/vnd.chronoplexsoftware.familyx";
 /// or `family8` with the V1/V2 encryption) are read transparently, but saving
 /// always writes the current format: a `family8` V3 part, with the package
 /// metadata (`[Content_Types].xml`, `_rels/.rels`) pointing at it. See
-/// [`Package::source_format`]. Trees in the old pre-link schema are converted
+/// [`Package::source_format`]. [`Package::save_for_app12`] writes a copy for My Family Tree 12.x. Trees in the old pre-link schema are converted
 /// to the current schema on open (see [`crate::migrate`], [`Package::migration`]).
 #[derive(Clone)]
 pub struct Package {
@@ -198,7 +201,7 @@ impl Package {
             pkg.drop_part(name)?;
         }
         if source.part_name() != FAMILY_PART {
-            pkg.retarget_tree_part(source.part_name())?;
+            pkg.retarget_tree_part(source.part_name(), FAMILY_PART)?;
         }
         Ok(pkg)
     }
@@ -228,10 +231,10 @@ impl Package {
         Ok(())
     }
 
-    /// Point `[Content_Types].xml` and `_rels/.rels` at `family8` instead of `old`,
+    /// Point `[Content_Types].xml` and `_rels/.rels` at the tree part `new` instead of `old`,
     /// so the package describes the part that saving writes.
-    fn retarget_tree_part(&mut self, old: &str) -> Result<()> {
-        let (old_path, new_path) = (format!("/{old}"), format!("/{FAMILY_PART}"));
+    fn retarget_tree_part(&mut self, old: &str, new: &str) -> Result<()> {
+        let (old_path, new_path) = (format!("/{old}"), format!("/{new}"));
         if let Some((_, data)) = self.parts.iter_mut().find(|(n, _)| n == "[Content_Types].xml") {
             let mut types = Document::parse(data)?;
             let mut found = false;
@@ -270,33 +273,47 @@ impl Package {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        self.write_zip(SourceFormat::CURRENT)
+    }
+
+    fn write_zip(&self, format: SourceFormat) -> Result<Vec<u8>> {
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        let family_blob = codec::encode(&self.doc.to_bytes());
+        let family_blob = codec::encode_part(&self.doc.to_bytes(), format);
         let mut family = Some(family_blob);
         for (i, (name, data)) in self.parts.iter().enumerate() {
             if i == self.family_index {
-                write_entry(&mut zip, FAMILY_PART, family.take().as_deref().unwrap(), options)?;
+                write_entry(&mut zip, format.part_name(), family.take().as_deref().unwrap(), options)?;
             }
             write_entry(&mut zip, name, data, options)?;
         }
         if let Some(blob) = family {
-            write_entry(&mut zip, FAMILY_PART, &blob, options)?;
+            write_entry(&mut zip, format.part_name(), &blob, options)?;
         }
         Ok(zip.finish()?.into_inner())
     }
 
     /// Save atomically. An existing file is first copied to `<path>.bak`.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
-        let path = path.as_ref();
-        let bytes = self.to_bytes()?;
-        if path.exists() {
-            std::fs::copy(path, backup_path(path))?;
-        }
-        let tmp = path.with_extension("familyx.tmp");
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        write_file(path.as_ref(), &self.to_bytes()?)
+    }
+
+    /// A copy for My Family Tree 12.x, which cannot read the current format: the tree in the shape of
+    /// schema 14.4 (what 12.6 writes) in a `family7` part with the V2 encryption. The package itself is
+    /// unchanged. Returns what the copy could not carry over.
+    pub fn to_bytes_for_app12(&self) -> Result<(Vec<u8>, Downgrade)> {
+        let mut copy = self.clone();
+        let has_part = |name: &str| self.parts.iter().any(|(n, _)| n == name);
+        let downgrade = schema14::downgrade(&mut copy.doc, &has_part);
+        copy.retarget_tree_part(FAMILY_PART, APP12_FORMAT.part_name())?;
+        Ok((copy.write_zip(APP12_FORMAT)?, downgrade))
+    }
+
+    /// Save [`Package::to_bytes_for_app12`] atomically, keeping an existing file as `<path>.bak`.
+    pub fn save_for_app12(&self, path: impl AsRef<Path>) -> Result<Downgrade> {
+        let (bytes, downgrade) = self.to_bytes_for_app12()?;
+        write_file(path.as_ref(), &bytes)?;
+        Ok(downgrade)
     }
 
     /// Raw bytes of a non-family part, e.g. `Multimedia/abc.png`.
@@ -307,6 +324,16 @@ impl Package {
     pub fn part_names(&self) -> impl Iterator<Item = &str> {
         self.parts.iter().map(|(n, _)| n.as_str())
     }
+}
+
+fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    if path.exists() {
+        std::fs::copy(path, backup_path(path))?;
+    }
+    let tmp = path.with_extension("familyx.tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 fn write_entry(

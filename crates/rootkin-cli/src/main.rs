@@ -16,7 +16,9 @@ const USAGE: &str = "usage:
   rootkin-cli import <in.ged|in.gramps> <out.familyx>
                                           convert a GEDCOM / Gramps file, print what was dropped
   rootkin-cli export <tree.familyx> <out.ged|out.gramps>
-                                          write a GEDCOM 5.5.1 / Gramps XML file";
+                                          write a GEDCOM 5.5.1 / Gramps XML file
+  rootkin-cli save12 <tree.familyx> <out.familyx>
+                                          write a copy My Family Tree 12.x can open";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -74,6 +76,15 @@ fn main() -> Result<()> {
         ["export", file, out] => {
             let pkg = Package::open(file).context("open")?;
             rootkin_formats::export_path(&pkg, out).context("export")?;
+        }
+        ["save12", file, out] => {
+            let downgrade = Package::open(file).context("open")?.save_for_app12(out)?;
+            if downgrade.password_removed {
+                println!("note: the copy has no password (version 12 can't read the current password lock)");
+            }
+            if downgrade.task_places > 0 {
+                println!("note: {} task place(s) reduced to their description", downgrade.task_places);
+            }
         }
         ["check", file] => {
             let problems = familyx::edit::check(&Package::open(file).context("open")?.doc);

@@ -540,6 +540,13 @@ impl App {
                     self.flush_form();
                     self.pick_save_as();
                 }
+                if ui
+                    .add_enabled(has, egui::Button::new("Save a copy for My Family Tree 12…"))
+                    .on_hover_text("For older versions of the Windows app (12.x) that can't open current files")
+                    .clicked()
+                {
+                    self.save_copy_for_app12();
+                }
                 ui.separator();
                 if ui.button("Import GEDCOM / Gramps…").clicked() {
                     self.import(&ctx);
@@ -863,6 +870,42 @@ impl App {
         }
     }
 
+    fn save_copy_for_app12(&mut self) {
+        self.flush_form();
+        let Some(pkg) = &self.pkg else { return };
+        let stem = self.path.as_ref().and_then(|p| p.file_stem()).map_or("family".into(), |s| s.to_string_lossy());
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Family tree", &["familyx"])
+            .set_file_name(format!("{stem} (My Family Tree 12).familyx"))
+            .save_file()
+        else {
+            return;
+        };
+        if self.path.as_ref() == Some(&path) {
+            self.toasts.error("Choose another name: the copy must not replace the file you are working on");
+            return;
+        }
+        match pkg.save_for_app12(&path) {
+            Ok(downgrade) => {
+                let mut msg = format!(
+                    "Saved a copy for My Family Tree 12 as {}. Rootkin keeps working on your current file.",
+                    file_name(&path)
+                );
+                if downgrade.password_removed {
+                    msg.push_str(" The copy has no password: version 12 can't read this tree's password lock.");
+                }
+                if downgrade.task_places > 0 {
+                    msg.push_str(&format!(
+                        " {} research task place(s) keep only their name, as version 12 has no place details for tasks.",
+                        downgrade.task_places
+                    ));
+                }
+                self.toasts.info(msg);
+            }
+            Err(e) => self.toasts.error(format!("Could not save the copy: {e}")),
+        }
+    }
+
     fn export_format(&mut self, extension: &str, format: crate::formats::Format) {
         self.flush_form();
         let Some(pkg) = &self.pkg else { return };
@@ -894,6 +937,9 @@ fn migration_notice(pkg: &Package) -> Option<String> {
         report.spouse_links + report.parent_links,
         report.media,
     );
+    if report.from_version == familyx::migrate::schema14::APP12_VERSION {
+        msg.push_str("\n\nTo keep using the tree in My Family Tree 12, use File → Save a copy for My Family Tree 12…");
+    }
     if !report.dropped.is_empty() {
         msg.push_str(&format!("\n\nAs the original app does, Rootkin left out: {}.", report.dropped.join("; ")));
     }

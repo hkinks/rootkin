@@ -16,7 +16,8 @@ Rootkin is an independent project and is not affiliated with Chronoplex Software
 - Private by design: works fully offline, with no telemetry and no network access
 - Opens and saves `.familyx` without losing anything: data the editor does not
   understand is kept byte for byte
-- Opens trees from older versions of My Family Tree and converts them
+- Opens trees from older versions of My Family Tree and converts them, and saves
+  copies that My Family Tree 12 can open
 - People list with search and sorting, zoomable ancestor and descendant tree
 - Edit names (including other names), gender, events (birth, death, marriage, ...),
   notes, sources and citations

@@ -88,6 +88,10 @@ Crate `rootkin-formats` (modules `gedcom`, `gramps`); `familyx` stays format-spe
       Checked against files from the real LiteDB 4.1.4 and the app's own conversion (with 4.1.4 behind the
       private `LiteDB4` name). Open: no real database seen (the private build's `EncryptionVersion` is unknown),
       story annotations (WPF sticky notes) are dropped with a warning
+- [x] Copies for My Family Tree 12.x (`family7` V2, schema 14.4), checked in 12.6.10: the example copy
+      opens, photos show and survive its save; a file it saved opens in Rootkin (test fixture)
+- [ ] Forward steps 14.1 (citation `Event` -> `EventType`) and 14.3 (Find a Grave, custom id kinds) for
+      trees from versions before 12.6
 - [x] "New family tree" in the UI (library: `Package::new` done)
 - [x] Understand `FamilyId` attribute: password hash record, UI lock only; new files now get the default-password hash (docs/design.md)
 - [x] Update `FileProperties/LastSavedDate` and `FamilyProperties/LastSavedPersonId` on save

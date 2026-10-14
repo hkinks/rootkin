@@ -273,8 +273,8 @@ pub fn decode_part(part_name: &str, blob: &[u8]) -> Result<(Vec<u8>, SourceForma
     }
 }
 
-/// Encode XML in any known variant. Only [`SourceFormat::CURRENT`] is what the
-/// editor writes; the others exist to produce test vectors and for tooling.
+/// Encode XML in any known variant. The editor writes [`SourceFormat::CURRENT`], and
+/// `family7` V2 for copies for My Family Tree 12.x; the others exist for test vectors and tooling.
 pub fn encode_part(xml: &[u8], format: SourceFormat) -> Vec<u8> {
     let mut salt = [0u8; 32];
     let mut iv = [0u8; 16];

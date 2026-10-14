@@ -21,7 +21,8 @@ The tree lives in one zip entry; its name tells the era. `Package::open` picks t
 present (`family8`, `family7`, `family5`, `family4`, `family`, then plain `content.xml`),
 exposes `Package::source_format()` and **always saves as `family8` V3**: the old entry is
 dropped and `[Content_Types].xml` / `_rels/.rels` are retargeted to `/family8`. Other tree
-entries that were not read are kept verbatim.
+entries that were not read are kept verbatim. The one exception is the copy for My Family
+Tree 12.x (next section).
 
 | entry | container | password | KDF |
 |-------|-----------|----------|-----|
@@ -262,6 +263,33 @@ the user for a password (`ProtectionHandler.IsProtected`, set from `FamilyId`). 
   SHA256 / 10000 / 32 bytes. On conversion the app rewrites them to the 4-part notation, or to
   a fresh default record if they hash the default password or have any other shape.
   `Package::open` does the same for any non-current tree part.
+
+## Copies for My Family Tree 12.x
+
+My Family Tree 12.6.10 cannot open current files: it does not know the `family8` part ("file
+version is unrecognized"). A tree that 12.6.10 saved itself (`tests/data/old/app12_6.familyx`,
+the fictional example) settled what it writes:
+
+- tree part `family7`, AES container with the V2 tag; the package metadata points at `/family7`;
+- `FileProperties/Version` **14.4** (not 12.6). An older stamp makes it run its own conversion
+  chain, announce that the format needs updating and lose the photos;
+- the 88-character legacy `FamilyId` (a 4-part record would look like a password lock);
+- `PackagedFile/IsResolved` stored in the file (since 14.5 the app computes it). A missing value
+  means false: 12.6 then shows a placeholder and leaves the photo out of its next save.
+
+`Package::save_for_app12` (File -> "Save a copy for My Family Tree 12...", `rootkin-cli save12`)
+writes such a copy and leaves the open package alone. `migrate::schema14::downgrade` undoes the
+chain's steps above 14.4: `NameTranslation` `*Parts` lists back to string arrays (14.8), task
+`PlaceDetails` back to the `Location` text (14.6; other place details are counted as lost), a fresh
+legacy default `FamilyId` (14.7; a user password cannot be carried over and is dropped with a
+notice), `IsResolved` set from whether the photo's part exists. INIL needs no inverse: 14.4 knows
+it (14.5 only merged `EVEN_WAC` into it).
+
+Opening runs the same steps forward (`schema14::upgrade`, from `migrate`): INIT -> INIL below 14.0,
+EVEN_WAC -> INIL below 14.5, `Location` -> `PlaceDetails` below 14.6, string arrays -> `NamePart`
+lists below 14.8, and `IsResolved` is dropped. The other 14.x steps (14.1 citation events, 14.2
+story database, 14.3 Find a Grave and custom id kinds) predate 12.6 and need nothing for its
+files; 14.2 is implemented (story database), 14.1 and 14.3 are not yet.
 
 ## Data model
 

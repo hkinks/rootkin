@@ -21,6 +21,7 @@ use crate::doc::{Document, Element, Node};
 use crate::edit::{self, record, text_el, FACT_DATE_ORDER, FACT_ORDER, FAMILY_ORDER, NAME_ORDER, PERSON_ORDER};
 
 mod facts;
+pub mod schema14;
 mod stories;
 
 /// Schema version written by the current app (`FileProperties/Version`).
@@ -117,6 +118,7 @@ pub fn migrate(doc: &mut Document, parts: &dyn Fn(&str) -> Option<Vec<u8>>) -> O
     migrate_relationships(doc, version, &mut report);
     assign_family_crest(doc, crest);
     facts::migrate_citations(&mut doc.root);
+    schema14::upgrade(doc, version);
     // The `Version` bump makes the app skip its own (already done) conversions.
     let props = doc.root.ensure_child("FileProperties", FAMILY_ORDER);
     props.ensure_child("Version", &["Version", "LastSavedDate", "CreationDate"]).set_text(&CURRENT_VERSION.to_string());
