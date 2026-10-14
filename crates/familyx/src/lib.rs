@@ -8,6 +8,7 @@
 pub mod codec;
 pub mod date;
 pub mod doc;
+pub mod duplicates;
 pub mod edit;
 mod index;
 mod lds_temples;

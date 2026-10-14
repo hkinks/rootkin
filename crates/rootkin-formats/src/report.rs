@@ -1,7 +1,7 @@
 //! The import report: what came in, what was left out (grouped, in plain
 //! words) and what the user may want to check.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use familyx::model::Tree;
 use familyx::Package;
@@ -141,28 +141,20 @@ pub(crate) fn finish(pkg: &Package, mut report: ImportReport, findings: Findings
     report
 }
 
-/// Pairs with the same name and birth years at most 2 apart, described for
-/// the report.
+/// Pairs that look like the same person (see `familyx::duplicates`), described
+/// for the report.
 fn possible_duplicates(tree: &Tree) -> Vec<String> {
-    let mut by_name: HashMap<String, Vec<(i32, String)>> = HashMap::new();
-    for p in &tree.people {
-        let name = p.display_name();
-        let key = name.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
-        let year = p.fact("BIRT").and_then(|f| f.date.year);
-        if let (false, Some(year)) = (key.is_empty(), year) {
-            by_name.entry(key).or_default().push((year, name));
+    let describe = |id: &str| {
+        let p = tree.person(id).expect("candidates come from the tree");
+        match p.fact("BIRT").and_then(|f| f.date.year) {
+            Some(y) => format!("{} (born {y})", p.display_name()),
+            None => format!("{} (birth year unknown)", p.display_name()),
         }
-    }
-    let mut out = Vec::new();
-    for mut people in by_name.into_values().filter(|v| v.len() > 1) {
-        people.sort();
-        for pair in people.windows(2) {
-            let ((a_year, a), (b_year, b)) = (&pair[0], &pair[1]);
-            if b_year - a_year <= 2 {
-                out.push(format!("{a} (born {a_year}) and {b} (born {b_year})"));
-            }
-        }
-    }
+    };
+    let mut out: Vec<String> = familyx::duplicates::find_duplicates(tree)
+        .iter()
+        .map(|d| format!("{} and {}", describe(&d.a), describe(&d.b)))
+        .collect();
     out.sort();
     out
 }
