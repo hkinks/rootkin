@@ -66,6 +66,9 @@ pub struct App {
     show_about: bool,
     /// File name and result of the last import, shown until dismissed.
     import_summary: Option<(String, crate::formats::ImportReport)>,
+    /// After an import, until the first save: the file it came from and the
+    /// file name "Save as" suggests.
+    pub(crate) imported_from: Option<(String, String)>,
     pub(crate) sources_ui: crate::sources::SourcesUi,
 }
 
@@ -110,6 +113,7 @@ impl App {
             notice: None,
             show_about: false,
             import_summary: None,
+            imported_from: None,
             sources_ui: crate::sources::SourcesUi::default(),
         };
         if let Some(path) = path {
@@ -171,6 +175,8 @@ impl App {
                 Job::Imported(path, Ok((pkg, summary))) => {
                     self.load(pkg, None);
                     self.saved_version = u64::MAX;
+                    let save_name = crate::formats::suggested_save_name(&summary, &path);
+                    self.imported_from = Some((file_name(&path), save_name));
                     self.import_summary = Some((file_name(&path), summary));
                 }
                 Job::Imported(path, Err(e)) => {
@@ -213,6 +219,7 @@ impl App {
         self.undo.clear();
         self.redo.clear();
         self.form = None;
+        self.imported_from = None;
         self.version = 0;
         self.saved_version = if path.is_some() { 0 } else { u64::MAX };
         self.tree_view.fit_now();
@@ -255,9 +262,12 @@ impl App {
 
     fn pick_save_as(&mut self) {
         let mut dialog = rfd::FileDialog::new().add_filter("Family tree", &["familyx"]);
-        dialog = dialog.set_file_name(
-            self.path.as_ref().and_then(|p| p.file_name()).map_or("family.familyx".into(), |n| n.to_string_lossy()),
-        );
+        let suggestion = match (&self.path, &self.imported_from) {
+            (Some(path), _) => path.file_name().map(|n| n.to_string_lossy().into_owned()),
+            (None, Some((_, save_name))) => Some(save_name.clone()),
+            (None, None) => None,
+        };
+        dialog = dialog.set_file_name(suggestion.unwrap_or_else(|| "family.familyx".into()));
         match dialog.save_file() {
             Some(mut path) => {
                 if path.extension().is_none() {
@@ -655,6 +665,8 @@ impl App {
             ui.separator();
             if let Some(path) = &self.path {
                 ui.label(file_name(path));
+            } else if let (Some((from, _)), true) = (&self.imported_from, self.pkg.is_some()) {
+                ui.label(format!("Imported from {from}, not saved yet"));
             } else if self.pkg.is_some() {
                 ui.label("New family tree");
             }

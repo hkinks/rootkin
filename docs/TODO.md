@@ -16,7 +16,9 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 - [x] H6 "Add child" focuses Given names; Enter needs a given name
 - [x] H7 Toasts no longer cover the person panel buttons
 - [x] M7 Symbols the default fonts can't draw
-- [ ] M1-M6, M8 and Low items, see the review
+- [x] M1 Save as suggests the tree or file name; "Imported from ..., not saved yet" in the menu bar
+- [x] M4 Ancestry "Living" placeholders
+- [ ] M2, M3, M5, M6, M8 and Low items, see the review
 
 ## Next steps
 

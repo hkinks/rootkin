@@ -223,12 +223,31 @@ fn import_summary_explains_what_was_left_out_in_plain_words() {
     h.get_by_label_contains("Possible duplicate people: 1");
     h.get_by_label_contains("Links to records that are not in the file: 1");
     h.get_by_label("Save report…");
-    h.get_by_label("Copy details");
     // the raw lines are behind "Technical details"
     assert!(h.query_by_label_contains("INDI.BIRT.SOUR._APID").is_none());
     h.get_by_label("Technical details").click();
     h.run_steps(3);
     h.get_by_label_contains("dropped 1x INDI.BIRT.SOUR._APID");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn after_an_import_the_tree_says_where_it_came_from() {
+    let name = format!("rootkin-test-{}-origin.ged", std::process::id());
+    let path = std::env::temp_dir().join(&name);
+    std::fs::write(&path, "0 HEAD\n0 @I1@ INDI\n1 NAME Ada /Test/\n0 TRLR\n").unwrap();
+    let mut h = harness();
+    h.state_mut().request_import(path.clone());
+    h.run_steps(3);
+    h.get_by_label("Don't save").click();
+    wait_for_jobs(&mut h);
+    h.run_steps(3);
+    h.get_by_label("Look around first").click();
+    h.run_steps(3);
+    h.get_by_label(&format!("Imported from {name}, not saved yet"));
+    assert!(h.query_by_label("New family tree").is_none());
+    let suggested = h.state().imported_from.clone().unwrap().1;
+    assert_eq!(suggested, format!("rootkin-test-{}-origin.familyx", std::process::id()));
     let _ = std::fs::remove_file(path);
 }
 
