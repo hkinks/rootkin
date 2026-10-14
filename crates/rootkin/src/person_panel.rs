@@ -253,6 +253,7 @@ enum Action {
     MainPhoto(Id),
     RemovePhoto(Id),
     Goto(Id),
+    MergeWith,
     Delete,
 }
 
@@ -554,11 +555,20 @@ impl App {
 
             ui.add_space(20.0);
             ui.separator();
-            let delete = egui::Button::new(RichText::new("Delete this person…").color(Color32::WHITE))
-                .fill(Color32::from_rgb(0x9a, 0x2a, 0x2a));
-            if ui.add(delete).clicked() {
-                action = Some(Action::Delete);
-            }
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Merge with…")
+                    .on_hover_text("Use this when the same person is in the tree twice")
+                    .clicked()
+                {
+                    action = Some(Action::MergeWith);
+                }
+                let delete = egui::Button::new(RichText::new("Delete this person…").color(Color32::WHITE))
+                    .fill(Color32::from_rgb(0x9a, 0x2a, 0x2a));
+                if ui.add(delete).clicked() {
+                    action = Some(Action::Delete);
+                }
+            });
         });
         self.form = Some(form);
 
@@ -737,8 +747,10 @@ impl App {
     fn run_action(&mut self, person: &Person, action: Action) {
         let pid = person.id.clone();
         let name = person.display_name();
-        let structural =
-            !matches!(action, Action::Goto(_) | Action::Delete | Action::Unlink(_) | Action::AddRelation(..));
+        let structural = !matches!(
+            action,
+            Action::Goto(_) | Action::Delete | Action::MergeWith | Action::Unlink(_) | Action::AddRelation(..)
+        );
         match action {
             Action::Gender(g) => {
                 self.apply("Change gender", |d| edit::set_gender(d, &pid, g));
@@ -809,6 +821,7 @@ impl App {
                 }
             }
             Action::Goto(id) => self.select(&id),
+            Action::MergeWith => self.merge_ui.picker = Some(crate::merge_ui::Picker::new(&pid, &self.tree)),
             Action::Delete => self.confirm_delete = Some(pid),
         }
         if structural {

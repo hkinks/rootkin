@@ -333,6 +333,7 @@ fn user_facing_text_avoids_glyphs_missing_from_the_default_fonts() {
         ("sources.rs", include_str!("sources.rs")),
         ("tree_view.rs", include_str!("tree_view.rs")),
         ("relation_dialog.rs", include_str!("relation_dialog.rs")),
+        ("merge_ui.rs", include_str!("merge_ui.rs")),
         ("toasts.rs", include_str!("toasts.rs")),
     ];
     for (file, text) in sources {
@@ -342,4 +343,124 @@ fn user_facing_text_avoids_glyphs_missing_from_the_default_fonts() {
             }
         }
     }
+}
+
+fn tree_people(h: &Harness<App>) -> usize {
+    h.state().tree.people.len()
+}
+
+fn press_undo(h: &mut Harness<App>) {
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+}
+
+/// A GEDCOM with a second Leo Lindqvist (b. 1979, like the example's) and an unrelated Ada.
+const COUSIN_GED: &str = concat!(
+    "0 HEAD\n1 CHAR UTF-8\n",
+    "0 @I1@ INDI\n1 NAME Leo /Lindqvist/\n1 SEX M\n1 BIRT\n2 DATE 1979\n",
+    "0 @I2@ INDI\n1 NAME Ada /Test/\n0 TRLR\n"
+);
+
+#[test]
+fn import_into_the_open_tree_then_find_and_merge_the_duplicate() {
+    let path = std::env::temp_dir().join(format!("rootkin-test-{}-cousin.ged", std::process::id()));
+    std::fs::write(&path, COUSIN_GED).unwrap();
+    let mut h = harness();
+    let before = tree_people(&h);
+
+    // the File menu offers it
+    h.get_by_label("File").click();
+    h.run_steps(3);
+    h.get_by_label("Import into this tree…");
+
+    h.state_mut().start_import_into(path.clone());
+    wait_for_jobs(&mut h);
+    h.run_steps(3);
+    assert_eq!(tree_people(&h), before + 2);
+    let home = h.state().tree.home_person.clone().unwrap();
+    assert_eq!(h.state().tree.person(&home).unwrap().display_name(), "Erik Lindqvist");
+    h.get_by_label_contains("2 people were added to your tree");
+    h.get_by_label_contains("1 pair of people looks like the same person");
+
+    // the summary leads to the duplicates window
+    h.get_by_label("Find duplicate people…").click();
+    h.run_steps(3);
+    h.get_by_label("Duplicate people");
+    h.get_by_label_contains("Very likely the same person");
+    h.get_by_label("Compare and merge…").click();
+    h.run_steps(3);
+    h.get_by_label("Merge two people");
+    h.get_by_label("Merge").click();
+    h.run_steps(3);
+    assert_eq!(tree_people(&h), before + 1);
+    assert!(familyx::edit::check(&h.state().pkg.as_ref().unwrap().doc).is_empty());
+    h.get_by_label_contains("Merged Leo Lindqvist into Leo Lindqvist");
+    // the pair is gone from the list
+    h.get_by_label_contains("No people look like duplicates");
+
+    // merge and import are separate undo steps
+    press_undo(&mut h);
+    assert_eq!(tree_people(&h), before + 2);
+    press_undo(&mut h);
+    assert_eq!(tree_people(&h), before);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn duplicates_window_is_in_the_edit_menu() {
+    let mut h = harness();
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    h.get_by_label("Find duplicate people…").click();
+    h.run_steps(3);
+    h.get_by_label("Duplicate people");
+    h.get_by_label_contains("No people look like duplicates");
+}
+
+#[test]
+fn merge_with_from_the_person_panel_and_undo() {
+    use familyx::edit::{self, FactInput};
+    let mut h = harness();
+    h.get_all_by_label("Leo Lindqvist  b. 1979").next().unwrap().click();
+    h.run_steps(3);
+    let leo = h.state().selected.clone().unwrap();
+    let twin = h
+        .state_mut()
+        .apply("Add twin", |doc| {
+            let id = edit::add_person(doc, "Leo", "Lindqvist", familyx::model::Gender::Male);
+            let birth = FactInput { date: familyx::model::Date::year(1980), ..Default::default() };
+            edit::add_fact(doc, &id, "BIRT", &birth)?;
+            let job = FactInput { details: "Sailor".into(), ..Default::default() };
+            edit::add_fact(doc, &id, "OCCU", &job)?;
+            Ok(id)
+        })
+        .unwrap();
+    h.run_steps(3);
+    let before = tree_people(&h);
+
+    h.get_by_label("Merge with…").click();
+    h.run_steps(3);
+    h.get_by_label("Merge Leo Lindqvist with…");
+    h.get_by_label_contains("(looks similar)").click();
+    h.run_steps(2);
+    h.get_by_label("Compare…").click();
+    h.run_steps(3);
+    // the comparison shows both records side by side
+    h.get_by_label("Merge two people");
+    h.get_by_label_contains("Occupation: Sailor");
+    h.get_by_label("Merge").click();
+    h.run_steps(3);
+
+    let tree = &h.state().tree;
+    assert_eq!(tree.people.len(), before - 1);
+    assert!(tree.person(&twin).is_none());
+    let kept = tree.person(&leo).expect("the selected person stays");
+    assert!(kept.facts.iter().any(|f| f.tag == "OCCU"));
+    assert_eq!(h.state().selected.as_deref(), Some(leo.as_str()));
+    h.get_by_label_contains("Unsaved changes");
+
+    press_undo(&mut h);
+    assert_eq!(tree_people(&h), before);
+    assert!(h.state().tree.person(&twin).is_some());
+    assert!(!h.state().tree.person(&leo).unwrap().facts.iter().any(|f| f.tag == "OCCU"));
 }

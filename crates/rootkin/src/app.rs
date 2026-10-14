@@ -20,6 +20,8 @@ enum Job {
     Opened(PathBuf, Result<Package, String>),
     /// A converted genealogy file and a summary of what came in.
     Imported(PathBuf, Result<(Package, crate::formats::ImportReport), String>),
+    /// The same, to be added to the open tree.
+    ImportedInto(PathBuf, Result<(Package, crate::formats::ImportReport), String>),
     Saved(PathBuf, u64, Result<(), String>),
 }
 
@@ -51,7 +53,7 @@ pub struct App {
     undo: Vec<(String, Document)>,
     redo: Vec<(String, Document)>,
     /// Bumped on every change; a save records which version it wrote.
-    version: u64,
+    pub(crate) version: u64,
     saved_version: u64,
     confirm_close: bool,
     /// Something to do once unsaved changes are dealt with.
@@ -69,7 +71,17 @@ pub struct App {
     /// After an import, until the first save: the file it came from and the
     /// file name "Save as" suggests.
     pub(crate) imported_from: Option<(String, String)>,
+    /// When the last import was added to the open tree: what it added.
+    import_into: Option<ImportedInto>,
+    pub(crate) merge_ui: crate::merge_ui::MergeUi,
     pub(crate) sources_ui: crate::sources::SourcesUi,
+}
+
+/// What "Import into this tree" added, for the summary.
+struct ImportedInto {
+    people: usize,
+    /// New people who look like people that were already in the tree.
+    likely_duplicates: usize,
 }
 
 #[derive(Clone)]
@@ -114,6 +126,8 @@ impl App {
             show_about: false,
             import_summary: None,
             imported_from: None,
+            import_into: None,
+            merge_ui: Default::default(),
             sources_ui: crate::sources::SourcesUi::default(),
         };
         if let Some(path) = path {
@@ -179,7 +193,8 @@ impl App {
                     self.imported_from = Some((file_name(&path), save_name));
                     self.import_summary = Some((file_name(&path), summary));
                 }
-                Job::Imported(path, Err(e)) => {
+                Job::ImportedInto(path, Ok((other, summary))) => self.finish_import_into(&path, other, summary),
+                Job::Imported(path, Err(e)) | Job::ImportedInto(path, Err(e)) => {
                     self.error_dialog = Some(format!("Could not import {}:\n\n{e}", path.display()));
                 }
                 Job::Saved(path, version, Ok(())) => {
@@ -220,6 +235,8 @@ impl App {
         self.redo.clear();
         self.form = None;
         self.imported_from = None;
+        self.import_into = None;
+        self.merge_ui = Default::default();
         self.version = 0;
         self.saved_version = if path.is_some() { 0 } else { u64::MAX };
         self.tree_view.fit_now();
@@ -581,6 +598,13 @@ impl App {
                 if ui.button("Import GEDCOM / Gramps…").clicked() {
                     self.import(&ctx);
                 }
+                if ui
+                    .add_enabled(has, egui::Button::new("Import into this tree…"))
+                    .on_hover_text("Add the people of a GEDCOM, Gramps or zip file to the tree that is open")
+                    .clicked()
+                {
+                    self.import_into();
+                }
                 ui.add_enabled_ui(has, |ui| {
                     ui.menu_button("Export", |ui| {
                         use crate::formats::Format;
@@ -643,6 +667,13 @@ impl App {
                 ui.separator();
                 if ui.add_enabled(self.pkg.is_some(), egui::Button::new("Add a person (not linked yet)…")).clicked() {
                     self.relation_dialog = Some(RelationDialog::new_unrelated());
+                }
+                if ui
+                    .add_enabled(self.pkg.is_some(), egui::Button::new("Find duplicate people…"))
+                    .on_hover_text("People entered twice, for example after adding a file to this tree")
+                    .clicked()
+                {
+                    self.merge_ui.dups_open = true;
                 }
             });
             ui.menu_button("View", |ui| {
@@ -864,20 +895,66 @@ impl App {
         if let Some((file, report)) = &self.import_summary {
             let mut choice = None;
             let mut save_report = false;
+            let mut find_duplicates = false;
+            let into = &self.import_into;
             egui::Modal::new(egui::Id::new("import_summary")).show(ctx, |ui| {
                 ui.set_max_width(560.0);
-                ui.heading(format!("Imported {file}"));
-                ui.label(format!("{} came in. It is open as a new tree that is not saved yet.", report.headline()));
+                match into {
+                    Some(added) => {
+                        ui.heading(format!("Added {file} to this tree"));
+                        ui.label(format!(
+                            "The file holds {}. {} added to your tree. You can undo this with Edit > Undo.",
+                            report.headline(),
+                            if added.people == 1 { "1 person was".to_string() } else { format!("{} people were", added.people) },
+                        ));
+                        if added.likely_duplicates > 0 {
+                            ui.label(format!(
+                                "{} look{} like {} already in the tree. Check them and merge the ones that are the same person.",
+                                if added.likely_duplicates == 1 {
+                                    "1 pair of people".to_string()
+                                } else {
+                                    format!("{} pairs of people", added.likely_duplicates)
+                                },
+                                if added.likely_duplicates == 1 { "s" } else { "" },
+                                if added.likely_duplicates == 1 { "the same person" } else { "the same people" },
+                            ));
+                        } else {
+                            ui.label("None of the new people look like people who were already in the tree.");
+                        }
+                    }
+                    None => {
+                        ui.heading(format!("Imported {file}"));
+                        ui.label(format!(
+                            "{} came in. It is open as a new tree that is not saved yet.",
+                            report.headline()
+                        ));
+                    }
+                }
                 egui::ScrollArea::vertical().max_height(340.0).auto_shrink([true, true]).show(ui, |ui| {
                     import_report_sections(ui, report);
                 });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Save as .familyx…").strong()).clicked() {
-                        choice = Some(true);
-                    }
-                    if ui.button("Look around first").clicked() {
-                        choice = Some(false);
+                    match into {
+                        Some(added) => {
+                            if added.likely_duplicates > 0
+                                && ui.button(RichText::new("Find duplicate people…").strong()).clicked()
+                            {
+                                find_duplicates = true;
+                            }
+                            let label = if added.likely_duplicates > 0 { "Later" } else { "OK" };
+                            if ui.button(label).clicked() {
+                                choice = Some(false);
+                            }
+                        }
+                        None => {
+                            if ui.button(RichText::new("Save as .familyx…").strong()).clicked() {
+                                choice = Some(true);
+                            }
+                            if ui.button("Look around first").clicked() {
+                                choice = Some(false);
+                            }
+                        }
                     }
                     if ui.button("Copy details").clicked() {
                         ui.ctx().copy_text(report.to_text(file));
@@ -889,6 +966,10 @@ impl App {
             });
             if save_report {
                 self.save_import_report();
+            }
+            if find_duplicates {
+                self.import_summary = None;
+                self.merge_ui.dups_open = true;
             }
             if let Some(save) = choice {
                 self.import_summary = None;
@@ -960,6 +1041,36 @@ impl App {
             let result = crate::formats::import(&path);
             let _ = tx.send(Job::Imported(path, result));
         });
+    }
+
+    /// Pick a file and add its people to the open tree. Nothing is replaced, so no questions asked.
+    fn import_into(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Genealogy files", &["ged", "gedcom", "gramps", "xml", "gdz", "zip"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.start_import_into(path);
+    }
+
+    pub(crate) fn start_import_into(&mut self, path: PathBuf) {
+        self.flush_form();
+        let tx = self.jobs.0.clone();
+        self.busy = Some(format!("Reading {}…", file_name(&path)));
+        std::thread::spawn(move || {
+            let result = crate::formats::import(&path);
+            let _ = tx.send(Job::ImportedInto(path, result));
+        });
+    }
+
+    /// Add the imported people to the open tree as one undoable step and show what happened.
+    fn finish_import_into(&mut self, path: &Path, other: Package, summary: crate::formats::ImportReport) {
+        let Some(added) = self.apply_pkg("Import into tree", |pkg| pkg.append(&other)) else { return };
+        let new_people: std::collections::HashSet<Id> = added.people.iter().cloned().collect();
+        let likely_duplicates = familyx::duplicates::find_duplicates_of_added(&self.tree, &new_people).len();
+        self.import_into = Some(ImportedInto { people: added.people.len(), likely_duplicates });
+        self.import_summary = Some((file_name(path), summary));
     }
 
     fn save_copy_for_app12(&mut self) {
@@ -1092,6 +1203,7 @@ impl eframe::App for App {
         self.relation_dialog_ui(&ctx);
         self.delete_dialog_ui(&ctx);
         self.unlink_dialog_ui(&ctx);
+        self.merge_dialogs(&ctx);
         self.dialogs(&ctx);
         if self.toasts.show(&ctx, central) {
             self.undo(false);

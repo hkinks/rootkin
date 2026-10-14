@@ -5,6 +5,7 @@ mod app;
 mod export;
 mod formats;
 mod layout;
+mod merge_ui;
 mod person_panel;
 mod photos;
 mod recent;
