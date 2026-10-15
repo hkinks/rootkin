@@ -31,7 +31,13 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 - [x] Description field only for events that have one; quick "Save now"; panel icon toggle; up to 30 generations
 - [x] Adding another name works again; couple relationship type (married, partnership, ...) and readable `MARR_*` names
 - [ ] Find where "Unknown <surname> Unknown" names come from (not in the saved file; seen in a running session)
-- [ ] Merging must refuse to make someone their own ancestor
+- [ ] Merging must refuse to make someone their own ancestor (final-review.md High 8)
+
+## Pre-beta review (see final-review.md)
+
+- [ ] Critical 1-4: job races and stale save callback, deep nesting crash, photo undo
+- [ ] High 5-8: decompression limits, RTF panic, close during prompt, parent cycles and layout cache
+- [ ] Medium 9-15 and Low items
 
 ## Next steps
 
