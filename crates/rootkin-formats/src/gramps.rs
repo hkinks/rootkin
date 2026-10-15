@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 
 use familyx::doc::{escape, Document, Element};
-use familyx::edit::{self, FactInput};
+use familyx::edit::{self, FactInput, NameExtras};
 use familyx::model::{Citation, Fact, Gender, Tree};
 use familyx::Package;
 
@@ -33,7 +33,8 @@ fn attr(s: &str) -> String {
 fn gramps_type(fact: &Fact) -> String {
     match GRAMPS_TYPES.iter().find(|(t, _)| *t == fact.tag) {
         Some((_, ty)) => (*ty).to_string(),
-        None if fact.tag == "EVEN" => "Event".to_string(),
+        // a user-named event keeps its name as the Gramps custom type
+        None if fact.tag == "EVEN" && fact.custom_tag.is_empty() => "Event".to_string(),
         None => fact.label().to_string(),
     }
 }
@@ -123,13 +124,15 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
             .collect()
     };
     let person_handle = |id: &str| tree.people.iter().position(|p| p.id == id).map(|i| format!("_i{}", i + 1));
+    // Gramps notes: (text, type); person notes first, then source notes
+    let mut notes: Vec<(String, &str)> = Vec::new();
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<!DOCTYPE database PUBLIC \"-//Gramps//DTD Gramps XML 1.7.1//EN\"\n");
     out.push_str("\"http://gramps-project.org/xml/1.7.1/grampsxml.dtd\">\n");
     out.push_str(&format!("<database xmlns=\"{NS}\">\n"));
     out.push_str(&format!(
-        "  <header>\n    <created date=\"{}\" version=\"5.1.0\"/>\n  </header>\n",
+        "  <header>\n    <created date=\"{}\" version=\"5.1.0\"/>\n    <researcher/>\n  </header>\n",
         chrono::Utc::now().format("%Y-%m-%d")
     ));
 
@@ -183,6 +186,9 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
             if !name.suffix.is_empty() {
                 out.push_str(&format!("        <suffix>{}</suffix>\n", text(&name.suffix)));
             }
+            if !name.title.is_empty() {
+                out.push_str(&format!("        <title>{}</title>\n", text(&name.title)));
+            }
             if !name.nickname.is_empty() {
                 out.push_str(&format!("        <nick>{}</nick>\n", text(&name.nickname)));
             }
@@ -209,6 +215,10 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
             if fam.husb == Some(&person.id) || fam.wife == Some(&person.id) {
                 out.push_str(&format!("      <parentin hlink=\"_f{}\"/>\n", f + 1));
             }
+        }
+        for note in person.notes.iter().map(|n| n.plain_text()).filter(|n| !n.trim().is_empty()) {
+            notes.push((note, "Person Note"));
+            out.push_str(&format!("      <noteref hlink=\"_n{}\"/>\n", notes.len()));
         }
         out.push_str(&citation_refs(&person.citations, "      "));
         out.push_str("    </person>\n");
@@ -237,8 +247,6 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
         }
         out.push_str("  </citations>\n");
     }
-    // source notes: one Gramps note per source note
-    let mut notes: Vec<String> = Vec::new();
     if !tree.sources.is_empty() {
         out.push_str("  <sources>\n");
         for (i, src) in tree.sources.iter().enumerate() {
@@ -255,7 +263,7 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
                 }
             }
             for note in &src.notes {
-                notes.push(note.plain_text());
+                notes.push((note.plain_text(), "Source Note"));
                 out.push_str(&format!("      <noteref hlink=\"_n{}\"/>\n", notes.len()));
             }
             if let Some(r) = src.repository.as_deref().and_then(|r| tree.repositories.iter().position(|x| x.id == r)) {
@@ -310,9 +318,9 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
     }
     if !notes.is_empty() {
         out.push_str("  <notes>\n");
-        for (i, note) in notes.iter().enumerate() {
+        for (i, (note, ty)) in notes.iter().enumerate() {
             out.push_str(&format!(
-                "    <note handle=\"_n{0}\" id=\"N{0:04}\" type=\"Source Note\" change=\"{change}\">\n      <text>{1}</text>\n    </note>\n",
+                "    <note handle=\"_n{0}\" id=\"N{0:04}\" type=\"{ty}\" change=\"{change}\">\n      <text>{1}</text>\n    </note>\n",
                 i + 1,
                 text(note)
             ));
@@ -335,8 +343,11 @@ fn write_family(
     change: i64,
 ) {
     out.push_str(&format!("    <family handle=\"_f{number}\" id=\"F{number:04}\" change=\"{change}\">\n"));
-    let married = fam.link.is_some_and(|l| l.facts.iter().any(|f| f.tag == "MARR"));
-    out.push_str(&format!("      <rel type=\"{}\"/>\n", if married { "Married" } else { "Unknown" }));
+    let rel = fam
+        .link
+        .and_then(|l| l.facts.iter().find(|f| familyx::edit::is_marriage_tag(&f.tag)))
+        .map_or("Unknown", |f| vocab::gramps_relationship(&f.tag));
+    out.push_str(&format!("      <rel type=\"{rel}\"/>\n"));
     for (tag, id) in [("father", fam.husb), ("mother", fam.wife)] {
         if let Some(h) = id.and_then(person_handle) {
             out.push_str(&format!("      <{tag} hlink=\"{h}\"/>\n"));
@@ -388,6 +399,9 @@ struct Importer<'a> {
     sources: HashMap<String, String>,
     /// citation handle -> (source id, page)
     citations: HashMap<String, (String, String)>,
+    /// note handle -> text, and the notes that were attached to something
+    notes: HashMap<String, String>,
+    used_notes: HashSet<String>,
 }
 
 fn handle(el: &Element) -> String {
@@ -414,12 +428,13 @@ fn parse_date(ev: &Element) -> DateValue {
         let a = |n: &str| el.attr(n).map(|v| v.into_owned()).unwrap_or_default();
         match el.name.as_str() {
             "dateval" => {
-                let kind = match a("type").as_str() {
-                    "about" => Kind::About,
-                    "estimated" => Kind::Estimated,
-                    "calculated" => Kind::Calculated,
-                    "before" => Kind::Before,
-                    "after" => Kind::After,
+                // `quality` says how the date was found; it wins over a plain "about"
+                let kind = match (a("type").as_str(), a("quality").as_str()) {
+                    ("before", _) => Kind::Before,
+                    ("after", _) => Kind::After,
+                    (_, "estimated") => Kind::Estimated,
+                    (_, "calculated") => Kind::Calculated,
+                    ("about", _) => Kind::About,
                     _ => Kind::Exact,
                 };
                 return DateValue { kind, start: dates::parse_gramps_ymd(&a("val")), ..Default::default() };
@@ -454,6 +469,8 @@ pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportR
         people: HashMap::new(),
         sources: HashMap::new(),
         citations: HashMap::new(),
+        notes: HashMap::new(),
+        used_notes: HashSet::new(),
     };
 
     for ev in root.child("events").into_iter().flat_map(|c| c.children_named("event")) {
@@ -499,6 +516,11 @@ pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportR
     for f in root.child("families").into_iter().flat_map(|c| c.children_named("family")) {
         imp.family(f);
         report.families += 1;
+    }
+    // only notes on sources and people are carried over
+    let unused = imp.notes.len().saturating_sub(imp.used_notes.len());
+    if unused > 0 {
+        imp.dropped.add_n("notes", unused);
     }
     for section in root.elements() {
         if ![
@@ -569,13 +591,12 @@ impl Importer<'_> {
                 self.dropped.add(format!("repository.{}", c.name));
             }
         }
-        let notes: HashMap<String, String> = root
+        self.notes = root
             .child("notes")
             .into_iter()
             .flat_map(|c| c.children_named("note"))
             .map(|n| (key(&n.attr("handle").unwrap_or_default()), n.child_text("text").unwrap_or_default()))
             .collect();
-        let mut used_notes = HashSet::new();
         for s in root.child("sources").into_iter().flat_map(|c| c.children_named("source")) {
             let mut input = edit::SourceInput::default();
             let mut note_texts = Vec::new();
@@ -586,8 +607,8 @@ impl Importer<'_> {
                     "spubinfo" => input.publisher = c.text().trim().to_string(),
                     "sabbrev" => input.abbreviation = c.text().trim().to_string(),
                     "noteref" => {
-                        used_notes.insert(handle(c));
-                        note_texts.extend(notes.get(&handle(c)).cloned());
+                        self.used_notes.insert(handle(c));
+                        note_texts.extend(self.notes.get(&handle(c)).cloned());
                     }
                     "reporef" => match repos.get(&handle(c)) {
                         Some(id) if input.repository.is_none() => {
@@ -604,11 +625,6 @@ impl Importer<'_> {
             input.note = Some(note).filter(|n| !n.is_empty());
             let id = edit::add_source(&mut self.pkg.doc, &input)?;
             self.sources.insert(key(&s.attr("handle").unwrap_or_default()), id);
-        }
-        // only notes on sources are carried over
-        let unused = notes.len().saturating_sub(used_notes.len());
-        if unused > 0 {
-            self.dropped.add_n("notes", unused);
         }
         for c in root.child("citations").into_iter().flat_map(|c| c.children_named("citation")) {
             let source = c.child("sourceref").and_then(|r| self.sources.get(&handle(r))).cloned();
@@ -643,19 +659,22 @@ impl Importer<'_> {
         self.events.get(&key(event_handle)).map(|e| e.citations.clone()).unwrap_or_default()
     }
 
-    fn fact_for(&self, event_handle: &str) -> Option<(String, FactInput)> {
+    /// The fact tag, its content and, for an event type Gramps users made up,
+    /// its name (people keep it as a named event; couples fold it into the details).
+    fn fact_for(&self, event_handle: &str) -> Option<(String, FactInput, Option<String>)> {
         let ev = self.events.get(&key(event_handle))?;
-        let known = GRAMPS_TYPES.iter().find(|(_, ty)| ty.eq_ignore_ascii_case(ev.ty.trim())).map(|(t, _)| *t);
-        let (tag, details) = match known {
-            Some(tag) => (tag, ev.description.clone()),
-            None => {
-                let generic = matches!(ev.ty.trim(), "" | "Event" | "Custom" | "Unknown");
-                let parts = [(!generic).then(|| ev.ty.clone()), Some(ev.description.clone())];
-                ("EVEN", parts.into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; "))
-            }
+        let known = GRAMPS_TYPES
+            .iter()
+            .find(|(_, ty)| ty.eq_ignore_ascii_case(ev.ty.trim()))
+            .map(|(t, _)| *t)
+            .or_else(|| vocab::relationship_tag(&ev.ty));
+        let generic = matches!(ev.ty.trim(), "" | "Event" | "Custom" | "Unknown");
+        let (tag, details, custom) = match known {
+            Some(tag) => (tag, ev.description.clone(), None),
+            None => ("EVEN", ev.description.clone(), (!generic).then(|| ev.ty.trim().to_string())),
         };
         let place = ev.place.as_deref().map(|h| self.place_title(h)).unwrap_or_default();
-        Some((tag.to_string(), FactInput { date: dates::to_model(&ev.date), place, details }))
+        Some((tag.to_string(), FactInput { date: dates::to_model(&ev.date), place, details }, custom))
     }
 
     fn person(&mut self, p: &Element) -> Result<()> {
@@ -667,19 +686,26 @@ impl Importer<'_> {
         };
         let names: Vec<&Element> = p.children_named("name").collect();
         let primary = names.iter().position(|n| n.attr("alt").is_none()).unwrap_or(0);
-        let (given, surname) = names.get(primary).map(|n| self.name_parts(n)).unwrap_or_default();
+        let (given, surname, extras) = names.get(primary).map(|n| self.name_parts(n)).unwrap_or_default();
         let id = edit::add_person(&mut self.pkg.doc, &given, &surname, gender);
+        if !extras.is_empty() {
+            edit::set_name_extras(&mut self.pkg.doc, &id, None, &extras)?;
+        }
         self.people.insert(key(&p.attr("handle").unwrap_or_default()), id.clone());
         for (i, n) in names.iter().enumerate().filter(|(i, _)| *i != primary) {
             let _ = i;
-            let (g, s) = self.name_parts(n);
+            let (g, s, extras) = self.name_parts(n);
             let ty = n.attr("type").map(|t| vocab::name_type(&t)).unwrap_or("");
-            edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+            let name_id = edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+            if !extras.is_empty() {
+                edit::set_name_extras(&mut self.pkg.doc, &id, Some(&name_id), &extras)?;
+            }
         }
 
         let (mut dead, mut birth_year) = (false, None);
         let mut person_citations = Vec::new();
         let mut online_photos = Vec::new();
+        let mut person_notes = Vec::new();
         for c in p.elements() {
             match c.name.as_str() {
                 "eventref" => {
@@ -688,7 +714,7 @@ impl Importer<'_> {
                         self.dropped.add(format!("person.eventref with role {role}"));
                         continue;
                     }
-                    let Some((tag, input)) = self.fact_for(&handle(c)) else {
+                    let Some((tag, input, custom)) = self.fact_for(&handle(c)) else {
                         self.warnings.push(format!("person {}: eventref to unknown event", id));
                         continue;
                     };
@@ -696,7 +722,10 @@ impl Importer<'_> {
                         birth_year = birth_year.or(input.date.year);
                     }
                     dead |= matches!(tag.as_str(), "DEAT" | "BURI" | "CREM");
-                    let fact = edit::add_fact(&mut self.pkg.doc, &id, &tag, &input)?;
+                    let fact = match custom {
+                        Some(name) => edit::add_custom_fact(&mut self.pkg.doc, &id, &name, &input)?,
+                        None => edit::add_fact(&mut self.pkg.doc, &id, &tag, &input)?,
+                    };
                     let cites = self.event_citations(&handle(c));
                     self.cite(&fact, &cites);
                 }
@@ -708,17 +737,22 @@ impl Importer<'_> {
                     None => self.dropped.add("person.objref to unknown object"),
                 },
                 "citationref" => person_citations.push(handle(c)),
+                "noteref" => {
+                    self.used_notes.insert(handle(c));
+                    person_notes.extend(self.notes.get(&handle(c)).cloned().filter(|n| !n.trim().is_empty()));
+                }
                 "gender" | "name" | "childof" | "parentin" => {}
                 other => self.dropped.add(format!("person.{other}")),
             }
         }
         self.cite(&id, &person_citations);
-        edit::set_person_note(&mut self.pkg.doc, &id, &online_photos.join("\n\n"))?;
+        person_notes.extend(online_photos);
+        edit::set_person_note(&mut self.pkg.doc, &id, &person_notes.join("\n\n"))?;
         edit::set_living(&mut self.pkg.doc, &id, vocab::guess_living(dead, birth_year))?;
         Ok(())
     }
 
-    fn name_parts(&mut self, n: &Element) -> (String, String) {
+    fn name_parts(&mut self, n: &Element) -> (String, String, NameExtras) {
         let surname: Vec<String> = n
             .children_named("surname")
             .map(|s| {
@@ -728,11 +762,14 @@ impl Importer<'_> {
             .filter(|s| !s.is_empty())
             .collect();
         for c in n.elements() {
-            if !["first", "surname", "dateval", "daterange", "datespan", "datestr"].contains(&c.name.as_str()) {
+            let kept = ["first", "surname", "suffix", "title", "nick", "dateval", "daterange", "datespan", "datestr"];
+            if !kept.contains(&c.name.as_str()) {
                 self.dropped.add(format!("person.name.{}", c.name));
             }
         }
-        (n.child_text("first").unwrap_or_default().trim().to_string(), surname.join(" "))
+        let part = |tag: &str| n.child_text(tag).unwrap_or_default().trim().to_string();
+        let extras = NameExtras { title: part("title"), suffix: part("suffix"), nickname: part("nick") };
+        (part("first"), surname.join(" "), extras)
     }
 
     fn family(&mut self, f: &Element) {
@@ -750,10 +787,16 @@ impl Importer<'_> {
             _ => None,
         };
 
+        let mut has_marriage = false;
         for c in f.elements() {
             match c.name.as_str() {
                 "eventref" => {
-                    let Some((tag, input)) = self.fact_for(&handle(c)) else { continue };
+                    let Some((tag, mut input, custom)) = self.fact_for(&handle(c)) else { continue };
+                    has_marriage |= edit::is_marriage_tag(&tag);
+                    if let Some(name) = custom {
+                        input.details =
+                            [name, input.details].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
+                    }
                     match &link {
                         Some(link) => match edit::add_couple_fact(&mut self.pkg.doc, link, &tag, &input) {
                             Ok(fact) => {
@@ -767,6 +810,16 @@ impl Importer<'_> {
                 }
                 "rel" | "father" | "mother" | "childref" => {}
                 other => self.dropped.add(format!("family.{other}")),
+            }
+        }
+
+        // the family's relationship type (Married, Civil Union, Unmarried) without an event for it
+        if let (Some(link), false) = (&link, has_marriage) {
+            let rel = f.child("rel").and_then(|r| r.attr("type")).unwrap_or_default();
+            if let Some(tag) = vocab::relationship_from_gramps(&rel) {
+                if let Err(e) = edit::add_couple_fact(&mut self.pkg.doc, link, tag, &FactInput::default()) {
+                    self.warnings.push(format!("family: {tag}: {e}"));
+                }
             }
         }
 

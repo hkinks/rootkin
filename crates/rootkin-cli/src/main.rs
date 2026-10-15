@@ -13,8 +13,8 @@ const USAGE: &str = "usage:
   rootkin-cli example <out.familyx>           write a fictional example family
   rootkin-cli import <in.ged|in.gramps> <out.familyx>
                                           convert a GEDCOM / Gramps file, print what was dropped
-  rootkin-cli export <tree.familyx> <out.ged|out.gramps>
-                                          write a GEDCOM 5.5.1 / Gramps XML file
+  rootkin-cli export <tree.familyx> <out.ged|out.gramps> [--gedcom7]
+                                          write a GEDCOM 5.5.1 (or 7 with --gedcom7) / Gramps XML file
   rootkin-cli save12 <tree.familyx> <out.familyx>
                                           write a copy My Family Tree 12.x can open";
 
@@ -74,6 +74,10 @@ fn main() -> Result<()> {
         ["export", file, out] => {
             let pkg = Package::open(file).context("open")?;
             rootkin_formats::export_path(&pkg, out).context("export")?;
+        }
+        ["export", file, out, "--gedcom7"] => {
+            let pkg = Package::open(file).context("open")?;
+            rootkin_formats::export_path_as(&pkg, out, rootkin_formats::Format::Gedcom7).context("export")?;
         }
         ["save12", file, out] => {
             let downgrade = Package::open(file).context("open")?.save_for_app12(out)?;

@@ -42,7 +42,8 @@ fn married_names_roundtrip_through_gedcom() {
         import(b"0 HEAD\n0 @I1@ INDI\n1 NAME Liisa /Tamm/\n2 _MARNM Valdmann\n0 TRLR\n", Format::Gedcom).unwrap();
     for format in [Format::Gedcom, Format::Gedcom7] {
         let text = String::from_utf8(export(&pkg, format).unwrap()).unwrap();
-        assert!(text.contains("1 NAME Liisa /Valdmann/\n2 TYPE married"), "{text}");
+        let ty = if format == Format::Gedcom7 { "MARRIED" } else { "married" };
+        assert!(text.contains(&format!("1 NAME Liisa /Valdmann/\n2 TYPE {ty}")), "{text}");
         let (back, report) = import(text.as_bytes(), format).unwrap();
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         let tree = Tree::from_doc(&back.doc);

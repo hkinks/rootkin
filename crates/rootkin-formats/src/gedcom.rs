@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use familyx::edit::{self, FactInput};
+use familyx::edit::{self, FactInput, NameExtras};
 use familyx::model::{Citation, Fact, Gender, Tree};
 use familyx::Package;
 
@@ -43,7 +43,15 @@ impl Writer {
 
     /// A line whose value may be long or multi-line: split with CONT / CONC.
     fn line(&mut self, level: usize, tag: &str, value: &str) {
-        let escaped = value.replace('@', "@@").replace("\r\n", "\n");
+        // 5.5.1 doubles every @; 7.0 only one that starts the value
+        let value = value.replace("\r\n", "\n");
+        let escaped = if self.v7 {
+            let lines: Vec<String> =
+                value.split('\n').map(|l| if l.starts_with('@') { format!("@{l}") } else { l.to_string() }).collect();
+            lines.join("\n")
+        } else {
+            value.replace('@', "@@")
+        };
         for (i, segment) in escaped.split('\n').enumerate() {
             let (lvl, t) = if i == 0 { (level, tag) } else { (level + 1, "CONT") };
             if self.v7 {
@@ -249,20 +257,31 @@ fn write_name(w: &mut Writer, name: &familyx::model::Name, alternate: bool) {
         .collect::<Vec<_>>()
         .join(" ");
     let mut line = format!("{} /{surname}/", name.given).trim_start().to_string();
+    if !name.title.is_empty() {
+        line = format!("{} {line}", name.title);
+    }
     if !name.suffix.is_empty() {
         line.push(' ');
         line.push_str(&name.suffix);
     }
     w.line(1, "NAME", &line);
     if alternate && !name.name_type.is_empty() {
-        let ty = match name.name_type.as_str() {
-            t @ ("Aka" | "Birth" | "Immigrant" | "Maiden" | "Married") => t.to_lowercase(),
-            other => other.to_string(),
-        };
-        w.line(2, "TYPE", &ty);
+        match (w.v7, name.name_type.as_str()) {
+            // 7.0 has a fixed list of upper-case values; anything else is OTHER plus the words
+            (true, t @ ("Aka" | "Birth" | "Immigrant" | "Maiden" | "Married" | "Professional")) => {
+                w.raw(2, "TYPE", &t.to_ascii_uppercase());
+            }
+            (true, other) => {
+                w.raw(2, "TYPE", "OTHER");
+                w.line(3, "PHRASE", other);
+            }
+            (false, t @ ("Aka" | "Birth" | "Immigrant" | "Maiden" | "Married")) => w.line(2, "TYPE", &t.to_lowercase()),
+            (false, other) => w.line(2, "TYPE", other),
+        }
     }
     for (tag, value) in [
         ("GIVN", &name.given),
+        ("NPFX", &name.title),
         ("SPFX", &name.surname_prefix),
         ("SURN", &name.surname),
         ("NSFX", &name.suffix),
@@ -293,6 +312,10 @@ fn write_fact(w: &mut Writer, fact: &Fact, in_family: bool, src: &HashMap<&str, 
         w.line(1, tag, &fact.details);
     } else if is_event {
         w.raw(1, tag, "");
+    } else if in_family && vocab::is_marriage_like(tag) {
+        // a relationship type of the app: still the marriage, with its kind as TYPE
+        w.raw(1, "MARR", "");
+        w.line(2, "TYPE", fact.label());
     } else {
         // tags GEDCOM does not know travel as a typed generic event
         w.raw(1, "EVEN", "");
@@ -301,9 +324,13 @@ fn write_fact(w: &mut Writer, fact: &Fact, in_family: bool, src: &HashMap<&str, 
     if tag == "EVEN" && !fact.custom_tag.is_empty() {
         w.line(2, "TYPE", &fact.custom_tag);
     }
-    let date = dates::from_model(&fact.date).to_gedcom();
-    if !date.is_empty() {
-        w.line(2, "DATE", &date);
+    let date = dates::from_model(&fact.date);
+    if !date.text.is_empty() && w.v7 {
+        // 7.0 has no free-text dates: an empty DATE carries the words as its PHRASE
+        w.raw(2, "DATE", "");
+        w.line(3, "PHRASE", &date.text);
+    } else if !date.is_empty() {
+        w.line(2, "DATE", &date.to_gedcom());
     }
     if !fact.place.is_empty() {
         w.line(2, "PLAC", &fact.place);
@@ -382,6 +409,27 @@ fn parse_line(line: &str) -> Option<(u32, Option<String>, String, String)> {
         return None;
     }
     Some((level, xref, tag.to_ascii_uppercase(), unescape_at(value)))
+}
+
+/// The words in parentheses after `INT <date>`.
+fn interpreted_phrase(date: &str) -> Option<&str> {
+    let date = date.trim();
+    if !date.get(..4).is_some_and(|h| h.eq_ignore_ascii_case("INT ")) {
+        return None;
+    }
+    let (_, rest) = date.split_once('(')?;
+    Some(rest.trim_end_matches(')').trim()).filter(|p| !p.is_empty())
+}
+
+/// An `ADDR` on one line: its text and the `ADR1`.. `CTRY` parts, comma separated.
+fn address_text(addr: &Node) -> Option<String> {
+    let lines = addr.value.lines().map(str::trim).map(str::to_string);
+    let parts = ["ADR1", "ADR2", "ADR3", "CITY", "STAE", "POST", "CTRY"].iter().filter_map(|t| {
+        // a MAP or other detail below is not text
+        addr.child_value(t).map(str::to_string)
+    });
+    let text = lines.chain(parts).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ");
+    Some(text).filter(|t| !t.is_empty())
 }
 
 /// `@@` stands for a literal `@`, except in pointers like `@I1@`.
@@ -599,6 +647,10 @@ impl Importer<'_> {
                             c.value.trim()
                         ));
                     }
+                    // `INT 1930 (about spring)`: keep the words, the date is read as "about"
+                    if let Some(words) = interpreted_phrase(&c.value) {
+                        notes.push(format!("Date as written: {words}"));
+                    }
                     // GEDCOM 7: the words the submitter wrote for the date
                     if let Some(phrase) = c.child_value("PHRASE") {
                         if date.is_empty() || !date.text.is_empty() {
@@ -615,6 +667,8 @@ impl Importer<'_> {
                 }
                 "TYPE" => ty = c.value.trim().to_string(),
                 "NOTE" | "SNOTE" => notes.push(self.note_text(c)),
+                // facts have no address field: it travels with the details
+                "ADDR" => notes.extend(address_text(c).map(|a| format!("Address: {a}"))),
                 // cited by the caller once the fact exists
                 "SOUR" => {}
                 t if SILENT.contains(&t) => {}
@@ -718,7 +772,7 @@ impl Importer<'_> {
 
     fn indi(&mut self, n: &Node) -> Result<()> {
         let names: Vec<&Node> = n.children_named("NAME").collect();
-        let (mut given, surname, married) = names.first().map(|n| self.name_parts(n)).unwrap_or_default();
+        let (mut given, surname, married, extras) = names.first().map(|n| self.name_parts(n)).unwrap_or_default();
         // Ancestry's stand-in for people it hides
         let placeholder = given == "Living";
         if placeholder {
@@ -734,6 +788,9 @@ impl Importer<'_> {
         if let Some(x) = &n.xref {
             self.people.insert(x.clone(), id.clone());
         }
+        if !extras.is_empty() {
+            edit::set_name_extras(&mut self.pkg.doc, &id, None, &extras)?;
+        }
         let label = match format!("{given} {surname}").trim() {
             "" => n.xref.clone().unwrap_or_else(|| "A person".into()),
             name => name.to_string(),
@@ -741,9 +798,17 @@ impl Importer<'_> {
         // `_MARNM`: the married surname, with the same given names
         let mut married_names: Vec<(String, String)> = married.map(|m| (given.clone(), m)).into_iter().collect();
         for alt in names.iter().skip(1) {
-            let (g, s, m) = self.name_parts(alt);
-            let ty = alt.child_value("TYPE").map(vocab::name_type).unwrap_or("");
-            edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+            let (g, s, m, extras) = self.name_parts(alt);
+            // 7.0's `TYPE OTHER` keeps the real words in a PHRASE
+            let ty = match (alt.child_value("TYPE"), alt.child("TYPE").and_then(|t| t.child_value("PHRASE"))) {
+                (Some(t), Some(phrase)) if t.eq_ignore_ascii_case("OTHER") => vocab::name_type(phrase),
+                (Some(t), _) => vocab::name_type(t),
+                _ => "",
+            };
+            let name_id = edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+            if !extras.is_empty() {
+                edit::set_name_extras(&mut self.pkg.doc, &id, Some(&name_id), &extras)?;
+            }
             married_names.extend(m.map(|m| (g.clone(), m)));
         }
         for (g, s) in married_names {
@@ -813,9 +878,10 @@ impl Importer<'_> {
         Ok(())
     }
 
-    /// (given names, surname, married surname from `_MARNM`)
-    fn name_parts(&mut self, n: &Node) -> (String, String, Option<String>) {
+    /// (given names, surname, married surname from `_MARNM`, title / suffix / nickname)
+    fn name_parts(&mut self, n: &Node) -> (String, String, Option<String>, NameExtras) {
         let (mut given, mut surname, suffix) = split_name(&n.value);
+        let mut extras = NameExtras { suffix, ..Default::default() };
         let (mut spfx, mut married) = (String::new(), None);
         for c in &n.children {
             let v = c.value.trim();
@@ -823,6 +889,9 @@ impl Importer<'_> {
                 "GIVN" if !v.is_empty() => given = v.to_string(),
                 "SURN" if !v.is_empty() => surname = v.to_string(),
                 "SPFX" => spfx = v.to_string(),
+                "NPFX" => extras.title = v.to_string(),
+                "NSFX" if !v.is_empty() => extras.suffix = v.to_string(),
+                "NICK" => extras.nickname = v.to_string(),
                 "_MARNM" if !v.is_empty() => {
                     // usually just the surname; some programs write `/Surname/`
                     let (_, slashed, _) = split_name(v);
@@ -836,10 +905,13 @@ impl Importer<'_> {
         if !spfx.is_empty() && !surname.starts_with(&spfx) {
             surname = format!("{spfx} {surname}");
         }
-        if !suffix.is_empty() {
-            self.dropped.add("INDI.NAME suffix");
+        // `Dr. Karl /Berg/` without a GIVN: the title is not part of the given names
+        if let Some(rest) = given.strip_prefix(extras.title.as_str()).map(str::trim_start) {
+            if !extras.title.is_empty() && !rest.is_empty() {
+                given = rest.to_string();
+            }
         }
-        (given, surname, married)
+        (given, surname, married, extras)
     }
 
     fn person(&mut self, fam: &str, tag: &str, n: &Node) -> Option<String> {
@@ -874,7 +946,12 @@ impl Importer<'_> {
         for c in &n.children {
             let tag = c.tag.as_str();
             if FAM_EVENTS.contains(&tag) {
-                let input = self.fact_input(&format!("FAM.{tag}"), c, false, false);
+                // `MARR` / `EVEN` typed with one of the app's relationship names
+                let relationship = matches!(tag, "MARR" | "EVEN")
+                    .then(|| c.child_value("TYPE").and_then(vocab::relationship_tag))
+                    .flatten();
+                let tag = relationship.unwrap_or(tag);
+                let input = self.fact_input(&format!("FAM.{tag}"), c, false, relationship.is_some());
                 match &link {
                     Some(link) => match edit::add_couple_fact(&mut self.pkg.doc, link, tag, &input) {
                         Ok(fact) => {

@@ -793,6 +793,46 @@ fn name_mut<'a>(person: &'a mut Element, name_id: &str) -> EditResult<&'a mut El
         .ok_or(EditError::Invalid("no such name"))
 }
 
+/// The parts of a name besides given names and surname.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NameExtras {
+    /// Honorific such as `Dr.`
+    pub title: String,
+    /// `Jr.`, `III`, ...
+    pub suffix: String,
+    pub nickname: String,
+}
+
+impl NameExtras {
+    pub fn is_empty(&self) -> bool {
+        self.title.is_empty() && self.suffix.is_empty() && self.nickname.is_empty()
+    }
+}
+
+/// Set a name's title, suffix and nickname; `name_id` `None` means the primary name.
+pub fn set_name_extras(
+    doc: &mut Document,
+    person_id: &str,
+    name_id: Option<&str>,
+    extras: &NameExtras,
+) -> EditResult<()> {
+    let person = person_mut(doc, person_id)?;
+    let names = person.path_mut("PersonNameCollection/Names").ok_or(EditError::Invalid("no such name"))?;
+    let name = names
+        .elements_mut()
+        .find(|n| match name_id {
+            Some(id) => n.attr("Id").as_deref() == Some(id),
+            None => n.child_text("IsPrimary").as_deref() == Some("true"),
+        })
+        .ok_or(EditError::Invalid("no such name"))?;
+    set_child_text(name, "Prefix", &extras.title, NAME_ORDER);
+    // the app writes these two even when empty
+    name.ensure_child("Suffix", NAME_ORDER).set_text(&extras.suffix);
+    name.ensure_child("Nickname", NAME_ORDER).set_text(&extras.nickname);
+    touch(person);
+    Ok(())
+}
+
 /// Update an alternate name; `name_type` must be one of the app's `NameType`
 /// values (see docs/design.md) or empty.
 pub fn update_name(

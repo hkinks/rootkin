@@ -403,14 +403,18 @@ Imports only use the `familyx` edit API (so the result is a valid `.familyx`); e
 
 Mapping (GEDCOM 5.5.1 UTF-8 / Gramps XML 1.7.1):
 
-- Names: primary + alternates (`NAME` with `TYPE` / `<name alt="1" type>`); prefix, suffix, nickname
-  are written but dropped on import (the edit API has no setter yet; prefix is folded into the surname).
+- Names: primary + alternates (`NAME` with `TYPE` / `<name alt="1" type>`); title (`NPFX`, `<title>`), suffix
+  and nickname are kept both ways (`edit::set_name_extras`); a surname prefix is folded into the surname.
+  GEDCOM 7 writes the upper-case `TYPE` values and `OTHER` + `PHRASE` for the rest.
 - Dates map onto the app's `DateDescriptor` (ABT/EST/CAL, BEF/AFT, BET..AND = Range, FROM..TO = Span,
   FROM/TO only, free text = TextOnly). Non-Gregorian calendars become text. Gramps has no open-ended
   spans: those are written as `datestr`.
 - Attribute-like facts (`OCCU`, `EDUC`, `RESI`, ...) keep their text as the GEDCOM value; events keep
   it as `NOTE`. Tags GEDCOM does not know are written as `EVEN` + `TYPE`. In Gramps, details are the
-  event description and unknown types are custom event types (read back as `EVEN`).
+  event description and unknown types are custom event types (read back as a named `EVEN`, like GEDCOM
+  `EVEN` + `TYPE`). Estimated and calculated dates use the `quality` attribute (the DTD allows only
+  before / after / about in `type`). Couple relationship types (`MARR_Civil`, ...) are GEDCOM `MARR` / `EVEN`
+  with a `TYPE` of the readable name, and the Gramps family `rel` (Married, Civil Union, Unmarried).
 - Families: one `FAM` / `<family>` per couple, HUSB/WIFE (father/mother) by gender, plus synthetic
   families for single parents and unmarried pairs so every child is attached. `PEDI adopted/foster/sealing`
   and Gramps `frel`/`mrel` map to the parent-link modifier (GEDCOM: per family, not per parent).
@@ -424,8 +428,10 @@ Mapping (GEDCOM 5.5.1 UTF-8 / Gramps XML 1.7.1):
   (`page`, `sourceref`; `confidence` is written as 2 because the DTD requires it and ignored on import) with
   `citationref` on people and events, source notes as `Source Note` notes. Not carried: `QUAY`/`confidence`,
   source `DATA`/`TEXT`, citation notes/media/dates, repository addresses, citations on names.
-- Not carried: person notes, addresses, couple status, event
-  roles other than primary, Gramps tags/attributes, `_CUSTOM` tags, ANSEL encoding.
+- Person notes are carried both ways (Gramps `Person Note`). An `ADDR` on a fact and the words of an
+  `INT` date travel in the fact's details.
+- Not carried: couple status, citations on families, event roles other than primary, Gramps
+  tags/attributes, `_CUSTOM` tags. See `docs/interop.md` for the full list.
   Unsupported couple facts without two spouses are dropped (reported).
 
 ## Dev
