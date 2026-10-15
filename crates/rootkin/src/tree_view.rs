@@ -1,8 +1,7 @@
 //! Zoomable family tree canvas drawn from [`crate::layout`].
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, TextureId,
-    Vec2,
+    self, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, TextureId, Vec2,
 };
 use familyx::model::{Gender, Id, Person, Tree};
 
@@ -246,24 +245,18 @@ impl TreeView {
             painter.image(texture, img, uv, Color32::WHITE);
             text_rect.min.x = img.right() + 6.0 * z;
         }
-        let font = |size: f32| FontId::proportional(size * z);
         let clip = painter.with_clip_rect(text_rect.intersect(self.canvas));
-        let c = text_rect.center();
-        clip.text(
-            c - Vec2::new(0.0, 9.0 * z),
-            Align2::CENTER_CENTER,
-            person.display_name(),
-            font(15.0),
-            Color32::WHITE,
-        );
         let half = matches!(node.role, Role::Sibling { half: true });
-        clip.text(
-            c + Vec2::new(0.0, 12.0 * z),
-            Align2::CENTER_CENTER,
-            box_subtitle(person, half),
-            font(13.0),
-            Color32::from_gray(225),
-        );
+        let lines = box_lines(&clip, person, box_subtitle(person, half), text_rect.width(), z);
+        let gap = 2.0 * z;
+        let total: f32 = lines.iter().map(|g| g.size().y).sum::<f32>() + gap * (lines.len().max(1) - 1) as f32;
+        let mut y = text_rect.center().y - total / 2.0;
+        for galley in lines {
+            let x = text_rect.center().x - galley.size().x / 2.0;
+            let height = galley.size().y;
+            clip.galley(Pos2::new(x, y), galley, Color32::WHITE);
+            y += height + gap;
+        }
 
         // more relatives beyond the view: small triangles above/below the box
         let tri = |tip: Pos2, up: bool| {
@@ -358,6 +351,60 @@ fn fit(layout: &Layout, canvas: Rect) -> (Vec2, f32) {
     (-bounds.center().to_vec2() * zoom, zoom)
 }
 
+/// One line of text, shortened with "…" if wider than `width`.
+fn one_line(
+    painter: &egui::Painter,
+    text: String,
+    size: f32,
+    color: Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job =
+        egui::text::LayoutJob::single_section(text, egui::TextFormat::simple(FontId::proportional(size), color));
+    job.wrap =
+        egui::text::TextWrapping {
+            max_width: width, max_rows: 1, break_anywhere: true, overflow_character: Some('…')
+        };
+    painter.layout_job(job)
+}
+
+/// The text lines of a tree box: the name on one line if it fits, else first
+/// names and surname on two smaller lines (each shortened if still too wide),
+/// then the subtitle (life span).
+fn box_lines(
+    painter: &egui::Painter,
+    person: &Person,
+    subtitle: String,
+    width: f32,
+    z: f32,
+) -> Vec<std::sync::Arc<egui::Galley>> {
+    let name = person.display_name();
+    let fits = |text: &str, size: f32| {
+        painter.layout_no_wrap(text.to_string(), FontId::proportional(size), Color32::WHITE).size().x <= width
+    };
+    let mut lines = Vec::new();
+    let split = person.primary_name().map(|n| {
+        let surname = [n.surname_prefix.as_str(), n.surname.as_str(), n.suffix.as_str()]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+        (n.given.clone(), surname)
+    });
+    match split {
+        Some((given, surname)) if !fits(&name, 15.0 * z) && !given.is_empty() && !surname.is_empty() => {
+            lines.push(one_line(painter, given, 13.5 * z, Color32::WHITE, width));
+            lines.push(one_line(painter, surname, 13.5 * z, Color32::WHITE, width));
+        }
+        _ => lines.push(one_line(painter, name, 15.0 * z, Color32::WHITE, width)),
+    }
+    if !subtitle.is_empty() {
+        lines.push(one_line(painter, subtitle, 13.0 * z, Color32::from_gray(225), width));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +416,36 @@ mod tests {
         assert_eq!(box_subtitle(&p, true), "· half");
         p.gender = Gender::Female;
         assert_eq!(box_subtitle(&p, false), "♀");
+    }
+
+    #[test]
+    fn long_names_wrap_into_the_box() {
+        let person = |given: &str, surname: &str| Person {
+            names: vec![familyx::model::Name { given: given.into(), surname: surname.into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.painter();
+            let width = 130.0;
+            let short = box_lines(painter, &person("Ada", "Kask"), "b. 2010".into(), width, 1.0);
+            assert_eq!(short.len(), 2, "one name line and the life span");
+            let long = box_lines(
+                painter,
+                &person("Aleksandra Margareta Elisabeth", "Lindqvist-Rebane"),
+                "1890–1961".into(),
+                width,
+                1.0,
+            );
+            assert_eq!(long.len(), 3, "first names, surname, life span");
+            for line in &long {
+                assert!(line.size().x <= width + 0.5, "{} is wider than the box", line.text());
+                assert_eq!(line.rows.len(), 1);
+            }
+            let last_drawn = long[0].rows[0].glyphs.last().map(|g| g.chr);
+            assert_eq!(last_drawn, Some('…'), "very long first names are shortened");
+            assert_eq!(long[1].text(), "Lindqvist-Rebane");
+        });
+        output.textures_delta.clear();
     }
 }
