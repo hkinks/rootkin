@@ -200,3 +200,21 @@ fn a_married_gramps_family_without_a_marriage_event_stays_married() {
     let (pkg, _) = import(xml.as_bytes(), Format::Gramps).unwrap();
     assert!(gramps_text(&pkg).contains(r#"<rel type="Married"/>"#));
 }
+
+#[test]
+fn addresses_and_interpreted_date_words_are_kept() {
+    let ged = concat!(
+        "0 HEAD\n0 @I1@ INDI\n1 NAME Ida /Test/\n",
+        "1 RESI\n2 ADDR Storgatan 5\n3 CITY Uppsala\n3 CTRY Sweden\n2 DATE ABT 1950\n",
+        "1 BIRT\n2 DATE INT 1930 (about spring)\n",
+        "0 TRLR\n"
+    );
+    let (pkg, report) = import(ged.as_bytes(), Format::Gedcom).unwrap();
+    let tree = Tree::from_doc(&pkg.doc);
+    let p = &tree.people[0];
+    assert_eq!(p.fact("RESI").unwrap().details, "Address: Storgatan 5, Uppsala, Sweden");
+    let birth = p.fact("BIRT").unwrap();
+    assert_eq!((birth.date.descriptor.as_str(), birth.date.year), ("About", Some(1930)));
+    assert_eq!(birth.details, "Date as written: about spring");
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}

@@ -411,6 +411,27 @@ fn parse_line(line: &str) -> Option<(u32, Option<String>, String, String)> {
     Some((level, xref, tag.to_ascii_uppercase(), unescape_at(value)))
 }
 
+/// The words in parentheses after `INT <date>`.
+fn interpreted_phrase(date: &str) -> Option<&str> {
+    let date = date.trim();
+    if !date.get(..4).is_some_and(|h| h.eq_ignore_ascii_case("INT ")) {
+        return None;
+    }
+    let (_, rest) = date.split_once('(')?;
+    Some(rest.trim_end_matches(')').trim()).filter(|p| !p.is_empty())
+}
+
+/// An `ADDR` on one line: its text and the `ADR1`.. `CTRY` parts, comma separated.
+fn address_text(addr: &Node) -> Option<String> {
+    let lines = addr.value.lines().map(str::trim).map(str::to_string);
+    let parts = ["ADR1", "ADR2", "ADR3", "CITY", "STAE", "POST", "CTRY"].iter().filter_map(|t| {
+        // a MAP or other detail below is not text
+        addr.child_value(t).map(str::to_string)
+    });
+    let text = lines.chain(parts).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ");
+    Some(text).filter(|t| !t.is_empty())
+}
+
 /// `@@` stands for a literal `@`, except in pointers like `@I1@`.
 fn unescape_at(value: &str) -> String {
     if is_pointer(value) {
@@ -626,6 +647,10 @@ impl Importer<'_> {
                             c.value.trim()
                         ));
                     }
+                    // `INT 1930 (about spring)`: keep the words, the date is read as "about"
+                    if let Some(words) = interpreted_phrase(&c.value) {
+                        notes.push(format!("Date as written: {words}"));
+                    }
                     // GEDCOM 7: the words the submitter wrote for the date
                     if let Some(phrase) = c.child_value("PHRASE") {
                         if date.is_empty() || !date.text.is_empty() {
@@ -642,6 +667,8 @@ impl Importer<'_> {
                 }
                 "TYPE" => ty = c.value.trim().to_string(),
                 "NOTE" | "SNOTE" => notes.push(self.note_text(c)),
+                // facts have no address field: it travels with the details
+                "ADDR" => notes.extend(address_text(c).map(|a| format!("Address: {a}"))),
                 // cited by the caller once the fact exists
                 "SOUR" => {}
                 t if SILENT.contains(&t) => {}
