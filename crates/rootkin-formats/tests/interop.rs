@@ -125,3 +125,26 @@ fn gedcom7_name_types_and_date_phrases_come_back_in() {
     assert_eq!(types, ["Maiden", "Adopted"]);
     assert_eq!(p.fact("BIRT").unwrap().date.text, "some spring day");
 }
+
+#[test]
+fn person_notes_survive_gramps_both_ways() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<database xmlns="http://gramps-project.org/xml/1.7.1/">
+  <people><person handle="_a" id="I1"><gender>M</gender><name><first>Ola</first><surname>Test</surname></name>
+    <noteref hlink="_n1"/><noteref hlink="_n2"/></person></people>
+  <notes>
+    <note handle="_n1" id="N1" type="Person Note"><text>Farmer on the island.</text></note>
+    <note handle="_n2" id="N2" type="Research"><text>Check the 1910 census.</text></note>
+  </notes>
+</database>"#;
+    let (pkg, report) = import(xml.as_bytes(), Format::Gramps).unwrap();
+    let tree = Tree::from_doc(&pkg.doc);
+    let note = tree.people[0].notes.iter().map(|n| n.plain_text()).collect::<Vec<_>>().join("|");
+    assert_eq!(note, "Farmer on the island.\n\nCheck the 1910 census.");
+    assert!(report.warnings.iter().all(|w| !w.contains("notes")), "{:?}", report.warnings);
+
+    let out = gramps_text(&pkg);
+    assert!(out.contains(r#"type="Person Note""#) && out.contains("Farmer on the island."), "{out}");
+    let again = tree_of(out.as_bytes(), Format::Gramps);
+    assert_eq!(again.people[0].notes[0].plain_text(), note.replace('|', "\n"));
+}

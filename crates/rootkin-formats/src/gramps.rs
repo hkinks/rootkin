@@ -124,6 +124,8 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
             .collect()
     };
     let person_handle = |id: &str| tree.people.iter().position(|p| p.id == id).map(|i| format!("_i{}", i + 1));
+    // Gramps notes: (text, type); person notes first, then source notes
+    let mut notes: Vec<(String, &str)> = Vec::new();
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<!DOCTYPE database PUBLIC \"-//Gramps//DTD Gramps XML 1.7.1//EN\"\n");
@@ -214,6 +216,10 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
                 out.push_str(&format!("      <parentin hlink=\"_f{}\"/>\n", f + 1));
             }
         }
+        for note in person.notes.iter().map(|n| n.plain_text()).filter(|n| !n.trim().is_empty()) {
+            notes.push((note, "Person Note"));
+            out.push_str(&format!("      <noteref hlink=\"_n{}\"/>\n", notes.len()));
+        }
         out.push_str(&citation_refs(&person.citations, "      "));
         out.push_str("    </person>\n");
     }
@@ -241,8 +247,6 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
         }
         out.push_str("  </citations>\n");
     }
-    // source notes: one Gramps note per source note
-    let mut notes: Vec<String> = Vec::new();
     if !tree.sources.is_empty() {
         out.push_str("  <sources>\n");
         for (i, src) in tree.sources.iter().enumerate() {
@@ -259,7 +263,7 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
                 }
             }
             for note in &src.notes {
-                notes.push(note.plain_text());
+                notes.push((note.plain_text(), "Source Note"));
                 out.push_str(&format!("      <noteref hlink=\"_n{}\"/>\n", notes.len()));
             }
             if let Some(r) = src.repository.as_deref().and_then(|r| tree.repositories.iter().position(|x| x.id == r)) {
@@ -314,9 +318,9 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
     }
     if !notes.is_empty() {
         out.push_str("  <notes>\n");
-        for (i, note) in notes.iter().enumerate() {
+        for (i, (note, ty)) in notes.iter().enumerate() {
             out.push_str(&format!(
-                "    <note handle=\"_n{0}\" id=\"N{0:04}\" type=\"Source Note\" change=\"{change}\">\n      <text>{1}</text>\n    </note>\n",
+                "    <note handle=\"_n{0}\" id=\"N{0:04}\" type=\"{ty}\" change=\"{change}\">\n      <text>{1}</text>\n    </note>\n",
                 i + 1,
                 text(note)
             ));
@@ -392,6 +396,9 @@ struct Importer<'a> {
     sources: HashMap<String, String>,
     /// citation handle -> (source id, page)
     citations: HashMap<String, (String, String)>,
+    /// note handle -> text, and the notes that were attached to something
+    notes: HashMap<String, String>,
+    used_notes: HashSet<String>,
 }
 
 fn handle(el: &Element) -> String {
@@ -459,6 +466,8 @@ pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportR
         people: HashMap::new(),
         sources: HashMap::new(),
         citations: HashMap::new(),
+        notes: HashMap::new(),
+        used_notes: HashSet::new(),
     };
 
     for ev in root.child("events").into_iter().flat_map(|c| c.children_named("event")) {
@@ -504,6 +513,11 @@ pub fn import(bytes: &[u8], resolve: crate::Resolve) -> Result<(Package, ImportR
     for f in root.child("families").into_iter().flat_map(|c| c.children_named("family")) {
         imp.family(f);
         report.families += 1;
+    }
+    // only notes on sources and people are carried over
+    let unused = imp.notes.len().saturating_sub(imp.used_notes.len());
+    if unused > 0 {
+        imp.dropped.add_n("notes", unused);
     }
     for section in root.elements() {
         if ![
@@ -574,13 +588,12 @@ impl Importer<'_> {
                 self.dropped.add(format!("repository.{}", c.name));
             }
         }
-        let notes: HashMap<String, String> = root
+        self.notes = root
             .child("notes")
             .into_iter()
             .flat_map(|c| c.children_named("note"))
             .map(|n| (key(&n.attr("handle").unwrap_or_default()), n.child_text("text").unwrap_or_default()))
             .collect();
-        let mut used_notes = HashSet::new();
         for s in root.child("sources").into_iter().flat_map(|c| c.children_named("source")) {
             let mut input = edit::SourceInput::default();
             let mut note_texts = Vec::new();
@@ -591,8 +604,8 @@ impl Importer<'_> {
                     "spubinfo" => input.publisher = c.text().trim().to_string(),
                     "sabbrev" => input.abbreviation = c.text().trim().to_string(),
                     "noteref" => {
-                        used_notes.insert(handle(c));
-                        note_texts.extend(notes.get(&handle(c)).cloned());
+                        self.used_notes.insert(handle(c));
+                        note_texts.extend(self.notes.get(&handle(c)).cloned());
                     }
                     "reporef" => match repos.get(&handle(c)) {
                         Some(id) if input.repository.is_none() => {
@@ -609,11 +622,6 @@ impl Importer<'_> {
             input.note = Some(note).filter(|n| !n.is_empty());
             let id = edit::add_source(&mut self.pkg.doc, &input)?;
             self.sources.insert(key(&s.attr("handle").unwrap_or_default()), id);
-        }
-        // only notes on sources are carried over
-        let unused = notes.len().saturating_sub(used_notes.len());
-        if unused > 0 {
-            self.dropped.add_n("notes", unused);
         }
         for c in root.child("citations").into_iter().flat_map(|c| c.children_named("citation")) {
             let source = c.child("sourceref").and_then(|r| self.sources.get(&handle(r))).cloned();
@@ -690,6 +698,7 @@ impl Importer<'_> {
         let (mut dead, mut birth_year) = (false, None);
         let mut person_citations = Vec::new();
         let mut online_photos = Vec::new();
+        let mut person_notes = Vec::new();
         for c in p.elements() {
             match c.name.as_str() {
                 "eventref" => {
@@ -721,12 +730,17 @@ impl Importer<'_> {
                     None => self.dropped.add("person.objref to unknown object"),
                 },
                 "citationref" => person_citations.push(handle(c)),
+                "noteref" => {
+                    self.used_notes.insert(handle(c));
+                    person_notes.extend(self.notes.get(&handle(c)).cloned().filter(|n| !n.trim().is_empty()));
+                }
                 "gender" | "name" | "childof" | "parentin" => {}
                 other => self.dropped.add(format!("person.{other}")),
             }
         }
         self.cite(&id, &person_citations);
-        edit::set_person_note(&mut self.pkg.doc, &id, &online_photos.join("\n\n"))?;
+        person_notes.extend(online_photos);
+        edit::set_person_note(&mut self.pkg.doc, &id, &person_notes.join("\n\n"))?;
         edit::set_living(&mut self.pkg.doc, &id, vocab::guess_living(dead, birth_year))?;
         Ok(())
     }
