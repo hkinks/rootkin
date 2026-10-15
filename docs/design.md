@@ -378,16 +378,22 @@ apart (10 if one is missing), 5 for the same death year, 10 each for a shared pa
 | --- | --- |
 | `PersonNameCollection` | names with the same words, suffix and nickname are not repeated; others become alternate names (`IsPrimary` removed). The removed primary name becomes primary only when chosen (`name_from`), then the kept primary becomes an alternate |
 | `Biology/Gender` | kept person's, unless unknown or `gender_from` says otherwise (unknown never overrules known) |
+| other `Biology` members | the `YDNA`/`MtDNA` entries of both, without repeats; other members only when the kept person has none |
 | `Facts` | an event with the same tag, kind, date, place and details is not repeated but gives its citations and notes to the existing one; others are added, without `IsPrimary` when the kept person already has that tag |
 | `Notes`, `PersonCitationCollection` | added unless the same text, or the same source and page, is already there |
 | `Multimedia`, `PrimaryImageId`, `Face` | photo ids added; the removed primary photo (and face) is taken only if the kept person has none |
 | `IsLiving` | dropped when the removed person has a death event |
-| other children (`Associations`, `Tags`, unknown elements) | moved when the kept person has no element of that name |
+| `Associations`, `Tags`, `CustomIds` | entries added unless an equal one (ignoring record id and timestamps) is there; an association with the kept person themselves is dropped |
+| other children (unknown elements) | moved when the kept person has no element of that name |
+| `Association/PersonId` anywhere (godparents, witnesses, sponsors on people, facts and couples) | point to the kept person |
 | `ParentChildLink` | `Person1Id`/`Person2Id` repointed; a link the kept person already has is dropped (its `ParentChildModifier` is copied when empty) |
-| `SpouseLink` | repointed; with a partner the kept person already has, the facts, status and unknown children move onto the existing link and the other link is deleted, with `FamilyId` references redirected and deduplicated |
+| `SpouseLink` | repointed; with a partner the kept person already has, the facts, status, notes (without repeats), `Multimedia`/`LDSFacts` entries and other children move onto the existing link and the other link is deleted, with `FamilyId` references redirected and deduplicated |
 | `FamilySpouseLinks`, `FamilyChildLinks` | entries move over with `SpouseId`/`ChildId` set to the kept person, one per `FamilyId` |
 | links between the two people | deleted |
 | `HomePersonId`, `LastSavedPersonId` | point to the kept person |
+
+Deleting a person (`edit::delete_person`) removes `PersonId` from associations that name them and keeps (or fills in)
+`PersonName`, so a godparent stays a name. `edit::check` reports associations naming a missing person.
 
 After the removed person is deleted (`edit::delete_person`), children of the kept person with both members of a couple
 as parents get their `FamilyChildLink` to that couple. A merge that would make the person their own ancestor

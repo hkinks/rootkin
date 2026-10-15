@@ -43,6 +43,8 @@ pub fn merge_people(doc: &mut Document, keep: &str, remove: &str, opts: MergeOpt
         ));
     }
     merge_links(doc, keep, remove)?;
+    // godparents, witnesses, sponsors: on any person, fact or couple
+    edit::repoint_associations(doc, remove, keep);
     merge_data(doc, keep, remove, opts)?;
     if let Some(props) = doc.root.child_mut("FamilyProperties") {
         for field in ["HomePersonId", "LastSavedPersonId"] {
@@ -220,11 +222,36 @@ fn merge_couple(dst: &mut Element, from: &Element) {
             dst.ensure_child("SpouseRelationshipStatus", ORDER).set_text(&s);
         }
     }
-    for c in from.elements().filter(|c| !ORDER.contains(&c.name.as_str())) {
-        if dst.child(&c.name).is_none() {
-            dst.push(c.clone());
+    merge_notes(dst, &[], from);
+    for c in from.elements().filter(|c| !ORDER.contains(&c.name.as_str()) && c.name != "Notes") {
+        match dst.child_mut(&c.name) {
+            None => {
+                dst.push(c.clone());
+            }
+            Some(d) if LISTS.contains(&c.name.as_str()) => merge_entries(d, c),
+            Some(_) => {}
         }
     }
+}
+
+/// Lists merged entry by entry (on people and couples); other elements are taken only when missing.
+const LISTS: &[&str] = &["Associations", "Tags", "CustomIds", "Multimedia", "LDSFacts", "YDNA", "MtDNA"];
+
+/// Append the entries of `from` that `dst` doesn't have yet. Entries that differ only in their
+/// record id and timestamps count as the same.
+fn merge_entries(dst: &mut Element, from: &Element) {
+    for e in from.elements() {
+        if !dst.elements().any(|d| same_entry(d, e)) {
+            dst.push(e.clone());
+        }
+    }
+}
+
+fn same_entry(a: &Element, b: &Element) -> bool {
+    let attrs = |e: &Element| -> Vec<(String, String)> {
+        e.attrs.iter().filter(|(k, _)| !matches!(k.as_str(), "Id" | "LastSaved" | "Creation")).cloned().collect()
+    };
+    a.name == b.name && attrs(a) == attrs(b) && a.children == b.children
 }
 
 /// After the merge, children of the kept person who have both members of a couple as parents
@@ -454,9 +481,17 @@ fn merge_data(doc: &mut Document, keep: &str, remove: &str, opts: MergeOptions) 
     if gone_died {
         el.remove_children_where(|e| e.name == "IsLiving");
     }
-    if el.child("Biology").is_none() {
-        if let Some(b) = gone.child("Biology") {
-            *el.ensure_child("Biology", PERSON_ORDER) = b.clone();
+    // DNA and the like: everyone has a Biology (with the gender), so merge it member by member
+    if let Some(b) = gone.child("Biology") {
+        let mine = el.ensure_child("Biology", PERSON_ORDER);
+        for c in b.elements().filter(|c| c.name != "Gender") {
+            match mine.child_mut(&c.name) {
+                None => {
+                    mine.push(c.clone());
+                }
+                Some(d) if LISTS.contains(&c.name.as_str()) => merge_entries(d, c),
+                Some(_) => {}
+            }
         }
     }
 
@@ -486,10 +521,18 @@ fn merge_data(doc: &mut Document, keep: &str, remove: &str, opts: MergeOptions) 
         }
     }
 
-    // anything else the removed person has, if the kept one has none of it
+    // lists entry by entry; anything else the removed person has, if the kept one has none of it
     for c in gone.elements().filter(|c| !HANDLED.contains(&c.name.as_str())) {
-        if el.child(&c.name).is_none() {
-            *el.ensure_child(&c.name, PERSON_ORDER) = c.clone();
+        match el.child_mut(&c.name) {
+            None => *el.ensure_child(&c.name, PERSON_ORDER) = c.clone(),
+            Some(dst) if LISTS.contains(&c.name.as_str()) => {
+                merge_entries(dst, c);
+                if c.name == "Associations" {
+                    // an association with the kept person themselves makes no sense
+                    dst.remove_children_where(|a| a.child_text("PersonId").as_deref() == Some(keep));
+                }
+            }
+            Some(_) => {}
         }
     }
     edit::touch(el);

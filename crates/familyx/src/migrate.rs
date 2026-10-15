@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use crate::doc::{Document, Element, Node};
 use crate::edit::{self, record, text_el, FACT_DATE_ORDER, FACT_ORDER, FAMILY_ORDER, NAME_ORDER, PERSON_ORDER};
 
-mod facts;
+pub(crate) mod facts;
 pub mod schema14;
 mod stories;
 

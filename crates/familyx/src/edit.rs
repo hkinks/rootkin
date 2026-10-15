@@ -358,6 +358,16 @@ pub fn delete_person(doc: &mut Document, person_id: &str) -> EditResult<()> {
             remove_relationship(doc, &link_id);
         }
     }
+    // godparent, witness, ... records naming the person keep the name, without the link
+    let name = crate::model::Tree::from_doc(doc).person(person_id).map(|p| p.display_name()).unwrap_or_default();
+    for_each_association(doc, &mut |a| {
+        if a.child_text("PersonId").as_deref() == Some(person_id) {
+            a.remove_children_where(|e| e.name == "PersonId");
+            if a.child_text("PersonName").is_none_or(|n| n.trim().is_empty()) && !name.trim().is_empty() {
+                a.ensure_child("PersonName", crate::migrate::facts::ASSOCIATION_ORDER).set_text(&name);
+            }
+        }
+    });
     collection(doc, "PeopleCollection")
         .remove_children_where(|p| p.name == "Person" && p.attr("Id").as_deref() == Some(person_id));
     if let Some(props) = doc.root.child_mut("FamilyProperties") {
@@ -368,6 +378,33 @@ pub fn delete_person(doc: &mut Document, person_id: &str) -> EditResult<()> {
         }
     }
     Ok(())
+}
+
+/// Call `f` on every `Association` (godparent, witness, sponsor, ...) of any person, fact or couple.
+fn for_each_association(doc: &mut Document, f: &mut dyn FnMut(&mut Element)) {
+    fn walk(el: &mut Element, f: &mut dyn FnMut(&mut Element)) {
+        for c in el.elements_mut() {
+            if c.name == "Association" {
+                f(c);
+            } else {
+                walk(c, f);
+            }
+        }
+    }
+    for list in ["PeopleCollection", "RelationshipCollection"] {
+        if let Some(c) = doc.root.child_mut(list) {
+            walk(c, f);
+        }
+    }
+}
+
+/// Point associations that name `from` at `to` (when merging two people).
+pub fn repoint_associations(doc: &mut Document, from: &str, to: &str) {
+    for_each_association(doc, &mut |a| {
+        if let Some(id) = a.child_mut("PersonId").filter(|e| e.text() == from) {
+            id.set_text(to);
+        }
+    });
 }
 
 // ---------------------------------------------------------------- facts
@@ -1272,6 +1309,26 @@ pub fn check(doc: &Document) -> Vec<String> {
     for s in &tree.sources {
         if let Some(r) = s.repository.as_deref().filter(|r| tree.repository(r).is_none()) {
             problems.push(format!("source {} refers to missing repository {r}", s.id));
+        }
+    }
+    fn associations<'a>(el: &'a Element, out: &mut Vec<&'a Element>) {
+        for c in el.elements() {
+            if c.name == "Association" {
+                out.push(c);
+            } else {
+                associations(c, out);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for list in ["PeopleCollection", "RelationshipCollection"] {
+        if let Some(c) = doc.root.child(list) {
+            associations(c, &mut found);
+        }
+    }
+    for a in found {
+        if let Some(p) = a.child_text("PersonId").filter(|p| !p.is_empty() && tree.person(p).is_none()) {
+            problems.push(format!("association {} refers to missing person {p}", a.attr("Id").unwrap_or_default()));
         }
     }
     problems

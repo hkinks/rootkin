@@ -76,7 +76,7 @@ const LDS_DATE_STATUS: [&str; 15] = [
 ];
 
 /// Child order of an `Association` record.
-pub(super) const ASSOCIATION_ORDER: &[&str] =
+pub(crate) const ASSOCIATION_ORDER: &[&str] =
     &["PersonId", "PersonName", "Role", "CustomRole", "AssociationCitationCollection", "Notes"];
 
 /// Case-insensitive match of an enum value; `None` if `text` is not one of `names`.
