@@ -4,7 +4,7 @@ members = ["crates/familyx", "crates/rootkin-cli", "crates/rootkin", "crates/roo
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 license = "Unlicense OR MIT"
 repository = "https://github.com/hkinks/rootkin"
 homepage = "https://github.com/hkinks/rootkin"

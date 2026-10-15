@@ -1179,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "familyx"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "aes",
  "base64",
@@ -2985,7 +2985,7 @@ dependencies = [
 
 [[package]]
 name = "rootkin"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "dirs",
  "eframe",
@@ -2999,7 +2999,7 @@ dependencies = [
 
 [[package]]
 name = "rootkin-cli"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "anyhow",
  "familyx",
@@ -3008,7 +3008,7 @@ dependencies = [
 
 [[package]]
 name = "rootkin-formats"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "chrono",
  "familyx",
