@@ -391,6 +391,12 @@ as parents get their `FamilyChildLink` to that couple. Not handled: a merge that
 - `crates/rootkin-cli`: `dump`, `pack`, `roundtrip`, `summary`, `check`, `example`, `import`, `export`.
 - `crates/rootkin-formats`: GEDCOM and Gramps XML import/export (see below).
 - `crates/rootkin`: egui app: people list, tree canvas, person panel.
+- Background jobs (open, save, import): one at a time. Each carries the tree's generation (bumped on every
+  load) and version (bumped on every edit) from when it started; a result for another tree is ignored, and
+  Open/Import results also when the tree changed meanwhile. While a job runs, a modal blocks editing and file
+  actions (invisible for the first 400 ms so quick jobs don't flash). The action waiting behind "Save your
+  changes?" runs only after the save started by that answer, and only if nothing changed since. Closing the
+  window with unsaved changes always asks. A panicking job reports back instead of staying busy.
 
 New elements must follow XmlSerializer child order (see `ensure_child`).
 

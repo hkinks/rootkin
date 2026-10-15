@@ -722,3 +722,166 @@ fn a_couple_can_be_marked_as_married_or_partners() {
     assert!(familyx::edit::check(&h.state().pkg.as_ref().unwrap().doc).is_empty());
     h.get_by_label_contains("Unsaved changes");
 }
+
+// ------------------------------------------------------------ background jobs
+
+/// A copy of the example tree in a fresh temp folder, to save over.
+fn example_copy(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rootkin-test-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.familyx"));
+    std::fs::copy(EXAMPLE, &path).unwrap();
+    path
+}
+
+fn harness_at(path: &std::path::Path) -> Harness<'static, App> {
+    let path = path.to_path_buf();
+    let mut h = Harness::builder().with_size([1400.0, 900.0]).build_eframe(move |cc| {
+        let mut app = App::new(cc, None);
+        app.load(Package::open(&path).unwrap(), Some(path.clone()));
+        app
+    });
+    h.run_steps(3);
+    h
+}
+
+fn rename_someone(h: &mut Harness<App>, given: &str) -> Option<()> {
+    let id = h.state().tree.people[2].id.clone();
+    let given = given.to_string();
+    h.state_mut().apply("Rename", move |d| familyx::edit::set_name(d, &id, &given, "Edit"))
+}
+
+fn has_person(h: &Harness<App>, name: &str) -> bool {
+    h.state().tree.people.iter().any(|p| p.display_name() == name)
+}
+
+/// Send a window close request and report whether the app cancelled it.
+fn close_cancelled(h: &mut Harness<App>) -> bool {
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+    let out = h.output();
+    out.viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose)))
+}
+
+#[test]
+fn while_a_save_runs_edits_and_file_actions_wait() {
+    let mine = example_copy("save-blocks");
+    let mut h = harness_at(&mine);
+    rename_someone(&mut h, "Before").unwrap();
+    h.state_mut().start_save(mine.clone()).expect("save started");
+    // editing and opening another file are refused until the save is done
+    assert!(rename_someone(&mut h, "During").is_none());
+    h.state_mut().guarded(crate::app::Pending::Open(EXAMPLE.into()));
+    assert!(!h.state().confirm_close && h.state().pending.is_none());
+    assert!(h.state_mut().start_save(mine.clone()).is_none(), "one save at a time");
+    wait_for_jobs(&mut h);
+    assert!(has_person(&h, "Before Edit") && !h.state().dirty());
+    assert_eq!(h.state().path.as_deref(), Some(mine.as_path()));
+}
+
+/// The reviewer's scenario: Ctrl+S, then File > Open with unsaved changes. The first save
+/// finishing must not open the other file while "Save your changes?" is unanswered.
+#[test]
+fn a_finished_save_does_not_answer_the_question_about_unsaved_changes() {
+    let mine = example_copy("save-prompt");
+    let mut h = harness_at(&mine);
+    rename_someone(&mut h, "First").unwrap();
+    h.state_mut().guarded(crate::app::Pending::Open(EXAMPLE.into()));
+    assert!(h.state().confirm_close);
+    // a save that the question didn't start (Ctrl+S) finishes meanwhile
+    h.state_mut().start_save(mine.clone()).unwrap();
+    wait_for_jobs(&mut h);
+    h.run_steps(2);
+    assert_eq!(h.state().path.as_deref(), Some(mine.as_path()), "the other file did not open");
+    assert!(h.state().confirm_close, "the question is still open");
+    h.get_by_label("Save your changes?");
+
+    // answering Save writes the tree and then opens the other file
+    let other = example_copy("save-prompt-other");
+    h.state_mut().pending = Some(crate::app::Pending::Open(other.clone()));
+    rename_someone(&mut h, "Second").unwrap();
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    wait_for_jobs(&mut h);
+    wait_for_jobs(&mut h);
+    assert_eq!(h.state().path.as_deref(), Some(other.as_path()));
+    let saved = familyx::model::Tree::from_doc(&Package::open(&mine).unwrap().doc);
+    assert!(saved.people.iter().any(|p| p.display_name() == "Second Edit"), "the answer saved the latest edits");
+}
+
+#[test]
+fn a_save_finishing_after_another_tree_was_loaded_leaves_that_tree_alone() {
+    let mine = example_copy("stale-save");
+    let mut h = harness_at(&mine);
+    rename_someone(&mut h, "Unsaved").unwrap();
+    h.state_mut().start_save(mine.clone()).unwrap();
+    // another tree is loaded before the save reports back
+    h.state_mut().load(Package::new(), None);
+    wait_for_jobs(&mut h);
+    assert_eq!(h.state().path, None, "the new tree is not marked as saved under the first file");
+}
+
+#[test]
+fn results_of_open_and_import_are_dropped_when_the_tree_changed() {
+    let mine = example_copy("stale-open");
+    let mut h = harness_at(&mine);
+    h.state_mut().start_open(EXAMPLE.into());
+    assert!(rename_someone(&mut h, "Blocked").is_none(), "editing waits for the open");
+    // a change that got in anyway: the tree is replaced only if nothing changed
+    h.state_mut().version += 1;
+    wait_for_jobs(&mut h);
+    assert_eq!(h.state().path.as_deref(), Some(mine.as_path()));
+
+    // "Import into this tree" never lands in a tree loaded meanwhile
+    let ged = temp_ged("stale-into");
+    h.state_mut().start_import_into(ged.clone());
+    h.state_mut().load(Package::new(), None);
+    wait_for_jobs(&mut h);
+    assert!(!has_person(&h, "Ada Test"));
+    let _ = std::fs::remove_file(ged);
+}
+
+#[test]
+fn closing_the_window_with_unsaved_changes_always_asks() {
+    let mut h = harness_at(&example_copy("close"));
+    assert!(!close_cancelled(&mut h), "nothing to lose: the window closes");
+    rename_someone(&mut h, "Unsaved").unwrap();
+    assert!(close_cancelled(&mut h));
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    // while the question for Open is showing
+    h.state_mut().guarded(crate::app::Pending::Open(EXAMPLE.into()));
+    h.run_steps(2);
+    assert!(close_cancelled(&mut h), "close is cancelled while the question shows");
+    assert_eq!(h.state().pending, Some(crate::app::Pending::Close), "the waiting action is now Close");
+}
+
+#[test]
+fn a_crashing_job_reports_back_and_frees_the_app() {
+    let mut h = harness();
+    h.state_mut().spawn_job("Testing…".into(), || panic!("test panic in a background job")).unwrap();
+    wait_for_jobs(&mut h);
+    assert!(rename_someone(&mut h, "Free").is_some());
+}
+
+#[test]
+fn the_working_overlay_shows_only_for_slow_jobs() {
+    let mut h = harness();
+    h.state_mut()
+        .spawn_job("Slow job…".into(), || {
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            crate::app::Job::Crashed("test".into())
+        })
+        .unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Please wait a moment.").is_none(), "no flash for quick jobs");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    h.run_steps(2);
+    h.get_by_label("Please wait a moment.");
+    wait_for_jobs(&mut h);
+    h.run_steps(2);
+    assert!(h.query_by_label("Please wait a moment.").is_none());
+}
