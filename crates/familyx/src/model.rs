@@ -33,6 +33,8 @@ impl Gender {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Name {
     pub id: Id,
+    /// Honorific such as `Dr.`
+    pub title: String,
     pub given: String,
     pub surname_prefix: String,
     pub surname: String,
@@ -443,6 +445,7 @@ fn read_person(p: &Element) -> Person {
         .filter(|n| n.elements().next().is_some())
         .map(|n| Name {
             id: attr(n, "Id"),
+            title: n.child_text("Prefix").unwrap_or_default(),
             given: n.child_text("Names").unwrap_or_default(),
             surname_prefix: n.child_text("SurnamePrefix").unwrap_or_default(),
             surname: n.child_text("Surname").unwrap_or_default(),

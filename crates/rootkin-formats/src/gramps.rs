@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 
 use familyx::doc::{escape, Document, Element};
-use familyx::edit::{self, FactInput};
+use familyx::edit::{self, FactInput, NameExtras};
 use familyx::model::{Citation, Fact, Gender, Tree};
 use familyx::Package;
 
@@ -183,6 +183,9 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
             }
             if !name.suffix.is_empty() {
                 out.push_str(&format!("        <suffix>{}</suffix>\n", text(&name.suffix)));
+            }
+            if !name.title.is_empty() {
+                out.push_str(&format!("        <title>{}</title>\n", text(&name.title)));
             }
             if !name.nickname.is_empty() {
                 out.push_str(&format!("        <nick>{}</nick>\n", text(&name.nickname)));
@@ -668,14 +671,20 @@ impl Importer<'_> {
         };
         let names: Vec<&Element> = p.children_named("name").collect();
         let primary = names.iter().position(|n| n.attr("alt").is_none()).unwrap_or(0);
-        let (given, surname) = names.get(primary).map(|n| self.name_parts(n)).unwrap_or_default();
+        let (given, surname, extras) = names.get(primary).map(|n| self.name_parts(n)).unwrap_or_default();
         let id = edit::add_person(&mut self.pkg.doc, &given, &surname, gender);
+        if !extras.is_empty() {
+            edit::set_name_extras(&mut self.pkg.doc, &id, None, &extras)?;
+        }
         self.people.insert(key(&p.attr("handle").unwrap_or_default()), id.clone());
         for (i, n) in names.iter().enumerate().filter(|(i, _)| *i != primary) {
             let _ = i;
-            let (g, s) = self.name_parts(n);
+            let (g, s, extras) = self.name_parts(n);
             let ty = n.attr("type").map(|t| vocab::name_type(&t)).unwrap_or("");
-            edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+            let name_id = edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+            if !extras.is_empty() {
+                edit::set_name_extras(&mut self.pkg.doc, &id, Some(&name_id), &extras)?;
+            }
         }
 
         let (mut dead, mut birth_year) = (false, None);
@@ -722,7 +731,7 @@ impl Importer<'_> {
         Ok(())
     }
 
-    fn name_parts(&mut self, n: &Element) -> (String, String) {
+    fn name_parts(&mut self, n: &Element) -> (String, String, NameExtras) {
         let surname: Vec<String> = n
             .children_named("surname")
             .map(|s| {
@@ -732,11 +741,14 @@ impl Importer<'_> {
             .filter(|s| !s.is_empty())
             .collect();
         for c in n.elements() {
-            if !["first", "surname", "dateval", "daterange", "datespan", "datestr"].contains(&c.name.as_str()) {
+            let kept = ["first", "surname", "suffix", "title", "nick", "dateval", "daterange", "datespan", "datestr"];
+            if !kept.contains(&c.name.as_str()) {
                 self.dropped.add(format!("person.name.{}", c.name));
             }
         }
-        (n.child_text("first").unwrap_or_default().trim().to_string(), surname.join(" "))
+        let part = |tag: &str| n.child_text(tag).unwrap_or_default().trim().to_string();
+        let extras = NameExtras { title: part("title"), suffix: part("suffix"), nickname: part("nick") };
+        (part("first"), surname.join(" "), extras)
     }
 
     fn family(&mut self, f: &Element) {

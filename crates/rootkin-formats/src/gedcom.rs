@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use familyx::edit::{self, FactInput};
+use familyx::edit::{self, FactInput, NameExtras};
 use familyx::model::{Citation, Fact, Gender, Tree};
 use familyx::Package;
 
@@ -249,6 +249,9 @@ fn write_name(w: &mut Writer, name: &familyx::model::Name, alternate: bool) {
         .collect::<Vec<_>>()
         .join(" ");
     let mut line = format!("{} /{surname}/", name.given).trim_start().to_string();
+    if !name.title.is_empty() {
+        line = format!("{} {line}", name.title);
+    }
     if !name.suffix.is_empty() {
         line.push(' ');
         line.push_str(&name.suffix);
@@ -263,6 +266,7 @@ fn write_name(w: &mut Writer, name: &familyx::model::Name, alternate: bool) {
     }
     for (tag, value) in [
         ("GIVN", &name.given),
+        ("NPFX", &name.title),
         ("SPFX", &name.surname_prefix),
         ("SURN", &name.surname),
         ("NSFX", &name.suffix),
@@ -718,7 +722,7 @@ impl Importer<'_> {
 
     fn indi(&mut self, n: &Node) -> Result<()> {
         let names: Vec<&Node> = n.children_named("NAME").collect();
-        let (mut given, surname, married) = names.first().map(|n| self.name_parts(n)).unwrap_or_default();
+        let (mut given, surname, married, extras) = names.first().map(|n| self.name_parts(n)).unwrap_or_default();
         // Ancestry's stand-in for people it hides
         let placeholder = given == "Living";
         if placeholder {
@@ -734,6 +738,9 @@ impl Importer<'_> {
         if let Some(x) = &n.xref {
             self.people.insert(x.clone(), id.clone());
         }
+        if !extras.is_empty() {
+            edit::set_name_extras(&mut self.pkg.doc, &id, None, &extras)?;
+        }
         let label = match format!("{given} {surname}").trim() {
             "" => n.xref.clone().unwrap_or_else(|| "A person".into()),
             name => name.to_string(),
@@ -741,9 +748,12 @@ impl Importer<'_> {
         // `_MARNM`: the married surname, with the same given names
         let mut married_names: Vec<(String, String)> = married.map(|m| (given.clone(), m)).into_iter().collect();
         for alt in names.iter().skip(1) {
-            let (g, s, m) = self.name_parts(alt);
+            let (g, s, m, extras) = self.name_parts(alt);
             let ty = alt.child_value("TYPE").map(vocab::name_type).unwrap_or("");
-            edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+            let name_id = edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
+            if !extras.is_empty() {
+                edit::set_name_extras(&mut self.pkg.doc, &id, Some(&name_id), &extras)?;
+            }
             married_names.extend(m.map(|m| (g.clone(), m)));
         }
         for (g, s) in married_names {
@@ -813,9 +823,10 @@ impl Importer<'_> {
         Ok(())
     }
 
-    /// (given names, surname, married surname from `_MARNM`)
-    fn name_parts(&mut self, n: &Node) -> (String, String, Option<String>) {
+    /// (given names, surname, married surname from `_MARNM`, title / suffix / nickname)
+    fn name_parts(&mut self, n: &Node) -> (String, String, Option<String>, NameExtras) {
         let (mut given, mut surname, suffix) = split_name(&n.value);
+        let mut extras = NameExtras { suffix, ..Default::default() };
         let (mut spfx, mut married) = (String::new(), None);
         for c in &n.children {
             let v = c.value.trim();
@@ -823,6 +834,9 @@ impl Importer<'_> {
                 "GIVN" if !v.is_empty() => given = v.to_string(),
                 "SURN" if !v.is_empty() => surname = v.to_string(),
                 "SPFX" => spfx = v.to_string(),
+                "NPFX" => extras.title = v.to_string(),
+                "NSFX" if !v.is_empty() => extras.suffix = v.to_string(),
+                "NICK" => extras.nickname = v.to_string(),
                 "_MARNM" if !v.is_empty() => {
                     // usually just the surname; some programs write `/Surname/`
                     let (_, slashed, _) = split_name(v);
@@ -836,10 +850,13 @@ impl Importer<'_> {
         if !spfx.is_empty() && !surname.starts_with(&spfx) {
             surname = format!("{spfx} {surname}");
         }
-        if !suffix.is_empty() {
-            self.dropped.add("INDI.NAME suffix");
+        // `Dr. Karl /Berg/` without a GIVN: the title is not part of the given names
+        if let Some(rest) = given.strip_prefix(extras.title.as_str()).map(str::trim_start) {
+            if !extras.title.is_empty() && !rest.is_empty() {
+                given = rest.to_string();
+            }
         }
-        (given, surname, married)
+        (given, surname, married, extras)
     }
 
     fn person(&mut self, fam: &str, tag: &str, n: &Node) -> Option<String> {

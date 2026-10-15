@@ -77,7 +77,7 @@ fn imports_handwritten_gramps_xml() {
     assert_eq!(tree.spouse_links.len(), 1);
     assert_eq!(tree.spouse_links[0].facts[0].tag, "MARR");
 
-    assert!(report.warnings.iter().any(|w| w.contains("person.name.nick")), "{:?}", report.warnings);
+    assert_eq!(peeter.names[0].nickname, "Pete");
     assert!(report.warnings.iter().any(|w| w.contains("dropped 1x notes")), "{:?}", report.warnings);
 
     let source = &tree.sources[0];

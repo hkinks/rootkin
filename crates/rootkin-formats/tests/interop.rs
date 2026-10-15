@@ -53,3 +53,38 @@ fn custom_event_types_keep_their_name_through_gramps() {
     assert!(out.contains("<type>Moved to the coast</type>"), "{out}");
     assert!(out.contains("<type>Event</type>"), "{out}");
 }
+
+#[test]
+fn name_title_suffix_and_nickname_survive_gedcom_and_gramps() {
+    let ged = concat!(
+        "0 HEAD\n0 @I1@ INDI\n1 NAME Dr. Karl Johan /Lindqvist/ Jr.\n2 NPFX Dr.\n2 GIVN Karl Johan\n2 NICK Kalle\n",
+        "1 NAME Karl /Berg/ III\n2 TYPE aka\n0 TRLR\n"
+    );
+    let check = |tree: &Tree| {
+        let names = &tree.people[0].names;
+        let primary = names.iter().find(|n| n.is_primary).unwrap();
+        assert_eq!(
+            (primary.given.as_str(), primary.title.as_str(), primary.suffix.as_str(), primary.nickname.as_str()),
+            ("Karl Johan", "Dr.", "Jr.", "Kalle")
+        );
+        let other = names.iter().find(|n| !n.is_primary).unwrap();
+        assert_eq!((other.surname.as_str(), other.suffix.as_str()), ("Berg", "III"));
+    };
+    let (pkg, report) = import(ged.as_bytes(), Format::Gedcom).unwrap();
+    check(&Tree::from_doc(&pkg.doc));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let again = export(&pkg, Format::Gedcom).unwrap();
+    let text = String::from_utf8(again.clone()).unwrap();
+    assert!(
+        text.contains("1 NAME Dr. Karl Johan /Lindqvist/ Jr.\n2 TYPE")
+            || text.contains("1 NAME Dr. Karl Johan /Lindqvist/ Jr.\n2 GIVN"),
+        "{text}"
+    );
+    assert!(text.contains("2 NPFX Dr."), "{text}");
+    check(&tree_of(&again, Format::Gedcom));
+
+    let via_gramps = gramps_text(&pkg);
+    assert!(via_gramps.contains("<title>Dr.</title>"), "{via_gramps}");
+    check(&tree_of(via_gramps.as_bytes(), Format::Gramps));
+}
