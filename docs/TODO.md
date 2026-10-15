@@ -35,9 +35,9 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 
 ## Pre-beta review (see final-review.md)
 
-- [ ] Critical 1-4: job races and stale save callback, deep nesting crash, photo undo
-- [ ] High 5-8: decompression limits, RTF panic, close during prompt, parent cycles and layout cache
-- [ ] Medium 9-15 and Low items
+- [x] Critical 1-4: job races and stale save callback, deep nesting crash, photo undo
+- [x] High 5-8: decompression limits, RTF panic, close during prompt, parent cycles and layout cache
+- [x] Medium 9-15 and Low items (left: list photos imported from outside the import folder; decode photos off the UI thread)
 
 ## Next steps
 
