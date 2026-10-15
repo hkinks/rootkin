@@ -25,6 +25,14 @@ See also [ux-review.md](ux-review.md) and [onboarding-review.md](onboarding-revi
 - [x] M8 People list: sort by birth year within a name, surname groups, fast for 20,000 people
 - [x] Low: recent files layout, collapsible person panel, "Try the example tree"
 
+## First-use feedback (2026-10-14)
+
+- [x] Square face crops (no squeezing), stable small buttons on hover, no blue behind photos
+- [x] Description field only for events that have one; quick "Save now"; panel icon toggle; up to 30 generations
+- [x] Adding another name works again; couple relationship type (married, partnership, ...) and readable `MARR_*` names
+- [ ] Find where "Unknown <surname> Unknown" names come from (not in the saved file; seen in a running session)
+- [ ] Merging must refuse to make someone their own ancestor
+
 ## Next steps
 
 1. Verify in the Windows app that Linux-saved files open (see "Verify")
