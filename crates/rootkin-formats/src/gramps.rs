@@ -414,12 +414,13 @@ fn parse_date(ev: &Element) -> DateValue {
         let a = |n: &str| el.attr(n).map(|v| v.into_owned()).unwrap_or_default();
         match el.name.as_str() {
             "dateval" => {
-                let kind = match a("type").as_str() {
-                    "about" => Kind::About,
-                    "estimated" => Kind::Estimated,
-                    "calculated" => Kind::Calculated,
-                    "before" => Kind::Before,
-                    "after" => Kind::After,
+                // `quality` says how the date was found; it wins over a plain "about"
+                let kind = match (a("type").as_str(), a("quality").as_str()) {
+                    ("before", _) => Kind::Before,
+                    ("after", _) => Kind::After,
+                    (_, "estimated") => Kind::Estimated,
+                    (_, "calculated") => Kind::Calculated,
+                    ("about", _) => Kind::About,
                     _ => Kind::Exact,
                 };
                 return DateValue { kind, start: dates::parse_gramps_ymd(&a("val")), ..Default::default() };

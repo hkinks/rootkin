@@ -164,18 +164,19 @@ impl DateValue {
         if self.is_empty() {
             return String::new();
         }
-        let dateval = |kind: &str| {
-            let ty = if kind.is_empty() { String::new() } else { format!(" type=\"{kind}\"") };
-            format!("<dateval val=\"{}\"{ty}/>", gramps_ymd(&self.start))
+        // the DTD allows `type` before / after / about and `quality` estimated / calculated
+        let dateval = |attr: &str| {
+            let attr = if attr.is_empty() { String::new() } else { format!(" {attr}") };
+            format!("<dateval val=\"{}\"{attr}/>", gramps_ymd(&self.start))
         };
         match self.kind {
             _ if !self.text.is_empty() => format!("<datestr val=\"{}\"/>", esc(&self.text)),
             Kind::Exact => dateval(""),
-            Kind::About => dateval("about"),
-            Kind::Estimated => dateval("estimated"),
-            Kind::Calculated => dateval("calculated"),
-            Kind::Before => dateval("before"),
-            Kind::After => dateval("after"),
+            Kind::About => dateval("type=\"about\""),
+            Kind::Estimated => dateval("quality=\"estimated\""),
+            Kind::Calculated => dateval("quality=\"calculated\""),
+            Kind::Before => dateval("type=\"before\""),
+            Kind::After => dateval("type=\"after\""),
             Kind::Range => {
                 format!("<daterange start=\"{}\" stop=\"{}\"/>", gramps_ymd(&self.start), gramps_ymd(&self.end))
             }
@@ -383,6 +384,15 @@ mod tests {
         assert!(!DateValue::from_gedcom("29 FEB 1904").impossible);
         assert!(DateValue::from_gedcom("29 FEB 1900").impossible);
         assert!(!DateValue::from_gedcom("garbled").impossible);
+    }
+
+    #[test]
+    fn gramps_xml_uses_type_and_quality_as_the_dtd_allows() {
+        let xml = |s: &str| DateValue::from_gedcom(s).to_gramps_xml();
+        assert_eq!(xml("ABT 1901"), r#"<dateval val="1901" type="about"/>"#);
+        assert_eq!(xml("EST 1901"), r#"<dateval val="1901" quality="estimated"/>"#);
+        assert_eq!(xml("CAL 1901"), r#"<dateval val="1901" quality="calculated"/>"#);
+        assert_eq!(xml("BEF 1901"), r#"<dateval val="1901" type="before"/>"#);
     }
 
     #[test]
