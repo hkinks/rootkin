@@ -55,3 +55,25 @@ fn tree_reads_people_and_links() {
         assert!(tree.person(&l.parent).is_some() && tree.person(&l.child).is_some());
     }
 }
+
+#[test]
+fn overlapping_saves_to_one_file_all_succeed_and_leave_no_temp_files() {
+    let dir = std::env::temp_dir().join(format!("familyx-saves-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("tree.familyx");
+    let pkg = Package::open(FIXTURE).unwrap();
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let (pkg, path) = (pkg.clone(), path.clone());
+            std::thread::spawn(move || pkg.save(&path).map_err(|e| e.to_string()))
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap().unwrap();
+    }
+    Package::open(&path).unwrap();
+    let names: Vec<String> =
+        std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

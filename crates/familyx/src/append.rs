@@ -152,7 +152,13 @@ pub(crate) fn append_document(dst: &mut Document, src: &Document) -> (AppendRepo
                 "PackagedFileCollection" => {
                     if let Some(old) = el.child_text("RelativePath").filter(|p| !p.is_empty()) {
                         let old = old.replace('\\', "/");
-                        let ext = old.rsplit_once('.').map_or("", |(_, e)| e);
+                        // the path comes from the other file: only a known photo type names the part,
+                        // so nothing like `../` can get into a part name
+                        let ext = match old.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).as_deref() {
+                            Some("png") => "png",
+                            Some("jpg" | "jpeg") => "jpg",
+                            _ => "",
+                        };
                         let new = format!("Multimedia/{}{}{ext}", new_id(), if ext.is_empty() { "" } else { "." });
                         let original_is_path =
                             el.child_text("OriginalFileName").map(|o| o.replace('\\', "/")) == Some(old.clone());

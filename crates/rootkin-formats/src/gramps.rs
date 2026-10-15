@@ -415,8 +415,15 @@ fn key(h: &str) -> String {
 
 fn gunzip_if_needed(bytes: &[u8]) -> Result<Vec<u8>> {
     if bytes.starts_with(&[0x1f, 0x8b]) {
+        let limit = familyx::limits::MAX_ENTRY;
         let mut out = Vec::new();
-        flate2::read::GzDecoder::new(bytes).read_to_end(&mut out).map_err(|e| Error::Gramps(format!("gzip: {e}")))?;
+        flate2::read::GzDecoder::new(bytes)
+            .take(limit + 1)
+            .read_to_end(&mut out)
+            .map_err(|e| Error::Gramps(format!("gzip: {e}")))?;
+        if out.len() as u64 > limit {
+            return Err(Error::Gramps(familyx::limits::too_big_message("the file", limit)));
+        }
         Ok(out)
     } else {
         Ok(bytes.to_vec())

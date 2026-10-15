@@ -284,6 +284,11 @@ pub struct Tree {
     pub repositories: Vec<Repository>,
     pub home_person: Option<Id>,
     by_id: HashMap<Id, usize>,
+    /// Positions in `parent_links` by child and by parent, in file order.
+    links_by_child: HashMap<Id, Vec<usize>>,
+    links_by_parent: HashMap<Id, Vec<usize>>,
+    /// Positions in `spouse_links` by partner.
+    couples_by_person: HashMap<Id, Vec<usize>>,
 }
 
 impl Tree {
@@ -349,7 +354,32 @@ impl Tree {
 
         let home_person = root.child_text("FamilyProperties/HomePersonId").filter(|s| !s.is_empty());
         let by_id = people.iter().enumerate().map(|(i, p)| (p.id.clone(), i)).collect();
-        Tree { people, spouse_links, parent_links, media, sources, repositories, home_person, by_id }
+        let (mut links_by_child, mut links_by_parent) =
+            (HashMap::<Id, Vec<usize>>::new(), HashMap::<Id, Vec<usize>>::new());
+        for (i, l) in parent_links.iter().enumerate() {
+            links_by_child.entry(l.child.clone()).or_default().push(i);
+            links_by_parent.entry(l.parent.clone()).or_default().push(i);
+        }
+        let mut couples_by_person = HashMap::<Id, Vec<usize>>::new();
+        for (i, l) in spouse_links.iter().enumerate() {
+            couples_by_person.entry(l.person1.clone()).or_default().push(i);
+            if l.person2 != l.person1 {
+                couples_by_person.entry(l.person2.clone()).or_default().push(i);
+            }
+        }
+        Tree {
+            people,
+            spouse_links,
+            parent_links,
+            media,
+            sources,
+            repositories,
+            home_person,
+            by_id,
+            links_by_child,
+            links_by_parent,
+            couples_by_person,
+        }
     }
 
     pub fn person(&self, id: &str) -> Option<&Person> {
@@ -376,16 +406,51 @@ impl Tree {
     }
 
     pub fn parents(&self, id: &str) -> Vec<&str> {
-        self.parent_links.iter().filter(|l| l.child == id).map(|l| l.parent.as_str()).collect()
+        self.parent_links_of(id).map(|l| l.parent.as_str()).collect()
+    }
+
+    /// The links to `id`'s parents, in file order.
+    pub fn parent_links_of<'a>(&'a self, id: &str) -> impl Iterator<Item = &'a ParentChildLink> + 'a {
+        self.links_by_child.get(id).into_iter().flatten().map(|&i| &self.parent_links[i])
+    }
+
+    /// The links to `id`'s children, in file order.
+    pub fn child_links_of<'a>(&'a self, id: &str) -> impl Iterator<Item = &'a ParentChildLink> + 'a {
+        self.links_by_parent.get(id).into_iter().flatten().map(|&i| &self.parent_links[i])
     }
 
     pub fn children(&self, id: &str) -> Vec<&str> {
         // file order, which the user can rearrange (see edit::move_child)
-        self.parent_links.iter().filter(|l| l.parent == id).map(|l| l.child.as_str()).collect()
+        self.child_links_of(id).map(|l| l.child.as_str()).collect()
     }
 
     pub fn spouse_links_of(&self, id: &str) -> Vec<&SpouseLink> {
-        self.spouse_links.iter().filter(|l| l.person1 == id || l.person2 == id).collect()
+        self.couples_by_person.get(id).into_iter().flatten().map(|&i| &self.spouse_links[i]).collect()
+    }
+
+    /// Everyone `id` descends from (not `id` itself, unless the links loop).
+    pub fn ancestors(&self, id: &str) -> std::collections::HashSet<&str> {
+        self.reach(id, |t, p| t.parents(p))
+    }
+
+    /// Everyone descending from `id` (not `id` itself, unless the links loop).
+    pub fn descendants(&self, id: &str) -> std::collections::HashSet<&str> {
+        self.reach(id, |t, p| t.children(p))
+    }
+
+    fn reach<'a>(
+        &'a self,
+        id: &str,
+        next: impl Fn(&'a Tree, &str) -> Vec<&'a str>,
+    ) -> std::collections::HashSet<&'a str> {
+        let mut seen = std::collections::HashSet::new();
+        let mut stack = next(self, id);
+        while let Some(p) = stack.pop() {
+            if seen.insert(p) {
+                stack.extend(next(self, p));
+            }
+        }
+        seen
     }
 
     pub fn spouses(&self, id: &str) -> Vec<&str> {

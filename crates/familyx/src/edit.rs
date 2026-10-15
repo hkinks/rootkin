@@ -358,6 +358,16 @@ pub fn delete_person(doc: &mut Document, person_id: &str) -> EditResult<()> {
             remove_relationship(doc, &link_id);
         }
     }
+    // godparent, witness, ... records naming the person keep the name, without the link
+    let name = crate::model::Tree::from_doc(doc).person(person_id).map(|p| p.display_name()).unwrap_or_default();
+    for_each_association(doc, &mut |a| {
+        if a.child_text("PersonId").as_deref() == Some(person_id) {
+            a.remove_children_where(|e| e.name == "PersonId");
+            if a.child_text("PersonName").is_none_or(|n| n.trim().is_empty()) && !name.trim().is_empty() {
+                a.ensure_child("PersonName", crate::migrate::facts::ASSOCIATION_ORDER).set_text(&name);
+            }
+        }
+    });
     collection(doc, "PeopleCollection")
         .remove_children_where(|p| p.name == "Person" && p.attr("Id").as_deref() == Some(person_id));
     if let Some(props) = doc.root.child_mut("FamilyProperties") {
@@ -368,6 +378,33 @@ pub fn delete_person(doc: &mut Document, person_id: &str) -> EditResult<()> {
         }
     }
     Ok(())
+}
+
+/// Call `f` on every `Association` (godparent, witness, sponsor, ...) of any person, fact or couple.
+fn for_each_association(doc: &mut Document, f: &mut dyn FnMut(&mut Element)) {
+    fn walk(el: &mut Element, f: &mut dyn FnMut(&mut Element)) {
+        for c in el.elements_mut() {
+            if c.name == "Association" {
+                f(c);
+            } else {
+                walk(c, f);
+            }
+        }
+    }
+    for list in ["PeopleCollection", "RelationshipCollection"] {
+        if let Some(c) = doc.root.child_mut(list) {
+            walk(c, f);
+        }
+    }
+}
+
+/// Point associations that name `from` at `to` (when merging two people).
+pub fn repoint_associations(doc: &mut Document, from: &str, to: &str) {
+    for_each_association(doc, &mut |a| {
+        if let Some(id) = a.child_mut("PersonId").filter(|e| e.text() == from) {
+            id.set_text(to);
+        }
+    });
 }
 
 // ---------------------------------------------------------------- facts
@@ -575,6 +612,22 @@ fn link_kind_between(doc: &Document, kind: &str, a: &str, b: &str, ordered: bool
         .map(|l| l.attr("Id").unwrap_or_default().into_owned())
 }
 
+/// Whether `ancestor` is a parent, grandparent, ... of `person` (any number of generations).
+pub fn is_ancestor(doc: &Document, ancestor: &str, person: &str) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = parents_of(doc, person);
+    while let Some(p) = stack.pop() {
+        if p == ancestor {
+            return true;
+        }
+        let up = parents_of(doc, &p);
+        if seen.insert(p) {
+            stack.extend(up);
+        }
+    }
+    false
+}
+
 fn parents_of(doc: &Document, child: &str) -> Vec<Id> {
     doc.parents_of(child)
 }
@@ -625,6 +678,9 @@ pub fn link_parent(doc: &mut Document, child: &str, parent: &str) -> EditResult<
     }
     if link_kind_between(doc, "ParentChildLink", child, parent, true).is_some() {
         return Err(EditError::Invalid("that person is already a child of this one"));
+    }
+    if is_ancestor(doc, child, parent) {
+        return Err(EditError::Invalid("that person descends from this one and can't also be their parent"));
     }
     let other_parents = parents_of(doc, child);
     collection_keep(doc, "RelationshipCollection").push(new_link("ParentChildLink", parent, child));
@@ -952,7 +1008,7 @@ pub fn set_primary_photo(doc: &mut Document, person_id: &str, media_id: &str) ->
 }
 
 /// Detach a photo from a person. Returns true if no person or fact refers to
-/// it anymore (the caller may then drop the file, see `Package::remove_photo`).
+/// it anymore (the caller may then drop the record, see `Package::remove_photo`).
 pub fn detach_photo(doc: &mut Document, person_id: &str, media_id: &str) -> EditResult<bool> {
     let person = person_mut(doc, person_id)?;
     if let Some(list) = person.child_mut("Multimedia") {
@@ -969,13 +1025,12 @@ pub fn detach_photo(doc: &mut Document, person_id: &str, media_id: &str) -> Edit
         }
     }
     touch(person);
+    // anything outside the file records naming the id keeps it (person and couple photos,
+    // fact and source media, the family crest, stories, elements this version doesn't know)
     fn refers(el: &Element, id: &str) -> bool {
-        ((el.name == "string" || el.name == "PrimaryImageId") && el.text() == id)
-            || el.elements().any(|c| refers(c, id))
+        el.text() == id || el.attrs.iter().any(|(_, v)| v == id) || el.elements().any(|c| refers(c, id))
     }
-    let used = ["PeopleCollection", "RelationshipCollection", "SourceCollection"]
-        .iter()
-        .any(|c| doc.root.child(c).is_some_and(|c| refers(c, media_id)));
+    let used = doc.root.elements().filter(|c| c.name != "PackagedFileCollection").any(|c| refers(c, media_id));
     Ok(!used)
 }
 
@@ -1294,6 +1349,26 @@ pub fn check(doc: &Document) -> Vec<String> {
     for s in &tree.sources {
         if let Some(r) = s.repository.as_deref().filter(|r| tree.repository(r).is_none()) {
             problems.push(format!("source {} refers to missing repository {r}", s.id));
+        }
+    }
+    fn associations<'a>(el: &'a Element, out: &mut Vec<&'a Element>) {
+        for c in el.elements() {
+            if c.name == "Association" {
+                out.push(c);
+            } else {
+                associations(c, out);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for list in ["PeopleCollection", "RelationshipCollection"] {
+        if let Some(c) = doc.root.child(list) {
+            associations(c, &mut found);
+        }
+    }
+    for a in found {
+        if let Some(p) = a.child_text("PersonId").filter(|p| !p.is_empty() && tree.person(p).is_none()) {
+            problems.push(format!("association {} refers to missing person {p}", a.attr("Id").unwrap_or_default()));
         }
     }
     problems

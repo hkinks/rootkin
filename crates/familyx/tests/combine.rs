@@ -110,6 +110,33 @@ fn append_into_an_empty_tree_and_of_an_empty_tree() {
     assert!(report.people.is_empty());
 }
 
+#[test]
+fn appended_photo_parts_get_safe_names() {
+    let mut theirs = Package::new();
+    let p = edit::add_person(&mut theirs.doc, "A", "B", Gender::Male);
+    theirs.add_photo(&p, vec![9; 3], "png", "a.png").unwrap();
+    // a RelativePath whose "extension" is a path
+    for path in theirs.doc.root.child_mut("PackagedFileCollection").unwrap().elements_mut() {
+        let rel = path.child_text("RelativePath").unwrap();
+        path.child_mut("RelativePath").unwrap().set_text(&format!("{rel}.x\\..\\..\\evil"));
+    }
+    let mut mine = Package::new();
+    mine.append(&theirs).unwrap();
+    for name in mine.part_names() {
+        assert!(!name.contains(".."), "{name}");
+    }
+    let mut jpeg = Package::new();
+    let q = edit::add_person(&mut jpeg.doc, "C", "D", Gender::Male);
+    jpeg.add_photo(&q, vec![1], "jpg", "c.JPEG").unwrap();
+    for path in jpeg.doc.root.child_mut("PackagedFileCollection").unwrap().elements_mut() {
+        let rel = path.child_text("RelativePath").unwrap().replace(".jpg", ".JPEG");
+        path.child_mut("RelativePath").unwrap().set_text(&rel);
+    }
+    let mut mine = Package::new();
+    mine.append(&jpeg).unwrap();
+    assert!(Tree::from_doc(&mine.doc).media.values().all(|m| m.part.ends_with(".jpg")));
+}
+
 /// Two records of Anna Tamm that share a partner and a child, plus what only one of them has.
 struct Duplicates {
     doc: Document,

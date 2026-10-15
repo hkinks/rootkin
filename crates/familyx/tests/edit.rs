@@ -218,13 +218,80 @@ fn photos_can_be_shared_switched_and_removed() {
     assert!(pkg.part(&part).is_some());
     assert_eq!(tree.person(&erik).unwrap().primary_image.as_deref(), Some(first.as_str()));
 
-    // last user gone: file, PackagedFile and relationship are removed
+    // last user gone: the PackagedFile goes; the file and its relationship are left out on save
     pkg.remove_photo(&leo, &second).unwrap();
-    assert!(pkg.part(&part).is_none());
     assert!(!Tree::from_doc(&pkg.doc).media.contains_key(&second));
-    let rels = String::from_utf8(pkg.part("_rels/.rels").unwrap().to_vec()).unwrap();
-    assert!(!rels.contains(&part));
     assert!(Tree::from_doc(&pkg.doc).person(&leo).unwrap().primary_image.is_none());
+    let saved = Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap();
+    assert!(saved.part(&part).is_none());
+    let rels = String::from_utf8(saved.part("_rels/.rels").unwrap().to_vec()).unwrap();
+    assert!(!rels.contains(&part));
+    // the other photos are still there
+    let first_part = tree.media[&first].part.clone();
+    assert!(saved.part(&first_part).is_some());
+}
+
+/// Undo restores the document as it was before an edit (as the app does).
+fn saved_after_undo(pkg: &mut Package, edit: impl FnOnce(&mut Package)) -> Package {
+    let snapshot = pkg.doc.clone();
+    edit(pkg);
+    pkg.doc = snapshot;
+    Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap()
+}
+
+#[test]
+fn undoing_remove_photo_keeps_the_picture() {
+    let mut pkg = open();
+    let erik = find(&Tree::from_doc(&pkg.doc), "Erik Lindqvist");
+    let media = pkg.add_photo(&erik, b"\x89PNGfake".to_vec(), "png", "erik.png").unwrap();
+    let part = Tree::from_doc(&pkg.doc).media[&media].part.clone();
+    let saved = saved_after_undo(&mut pkg, |p| p.remove_photo(&erik, &media).unwrap());
+    let tree = Tree::from_doc(&saved.doc);
+    assert_eq!(tree.person(&erik).unwrap().primary_image.as_deref(), Some(media.as_str()));
+    assert_eq!(saved.part(&part), Some(&b"\x89PNGfake"[..]), "the photo file came back with the undo");
+}
+
+#[test]
+fn undoing_add_photo_or_import_leaves_no_files_behind() {
+    let mut pkg = open();
+    let before: Vec<String> =
+        Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap().part_names().map(String::from).collect();
+    let erik = find(&Tree::from_doc(&pkg.doc), "Erik Lindqvist");
+    let saved = saved_after_undo(&mut pkg, |p| {
+        p.add_photo(&erik, vec![1, 2, 3], "jpg", "x.jpg").unwrap();
+    });
+    assert_eq!(saved.part_names().collect::<Vec<_>>(), before);
+    let other = open();
+    let saved = saved_after_undo(&mut pkg, |p| {
+        p.append(&other).unwrap();
+    });
+    assert_eq!(saved.part_names().collect::<Vec<_>>(), before);
+    let rels = String::from_utf8(saved.part("_rels/.rels").unwrap().to_vec()).unwrap();
+    assert_eq!(rels.matches("Multimedia/").count(), before.iter().filter(|n| n.starts_with("Multimedia/")).count());
+}
+
+#[test]
+fn media_files_referenced_from_anywhere_are_kept() {
+    let mut pkg = open();
+    let erik = find(&Tree::from_doc(&pkg.doc), "Erik Lindqvist");
+    let crest = pkg.add_photo(&erik, vec![7; 4], "png", "crest.png").unwrap();
+    let part = Tree::from_doc(&pkg.doc).media[&crest].part.clone();
+    // used as the family crest too (FamilyProperties/FamilyCrestId), then removed from the person
+    pkg.doc
+        .root
+        .ensure_child("FamilyProperties", &[])
+        .push(familyx::doc::Element::new("FamilyCrestId"))
+        .set_text(&crest);
+    pkg.remove_photo(&erik, &crest).unwrap();
+    assert!(Tree::from_doc(&pkg.doc).media.contains_key(&crest), "the crest still uses the record");
+    let saved = Package::from_bytes(&pkg.to_bytes().unwrap()).unwrap();
+    assert!(saved.part(&part).is_some());
+    // a file only some unknown element names is kept too
+    let mut pkg = saved;
+    pkg.doc.root.child_mut("FamilyProperties").unwrap().remove_children_where(|e| e.name == "FamilyCrestId");
+    let file = part.rsplit('/').next().unwrap().to_string();
+    pkg.doc.root.push(familyx::doc::Element::new("FutureThing")).set_text(&format!("Multimedia\\{file}"));
+    assert!(pkg.unreferenced_media().is_empty());
 }
 
 /// Does the record with this id have a direct child element `name`?

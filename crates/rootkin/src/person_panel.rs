@@ -193,6 +193,17 @@ impl PersonForm {
         self.facts.iter_mut().find(|f| f.id == id)
     }
 
+    /// A date was typed that can't be understood (it can't be saved, and leaving would lose it).
+    pub fn has_invalid_date(&self, tree: &Tree) -> bool {
+        let Some(p) = tree.person(&self.person_id) else { return false };
+        let all_facts: Vec<&Fact> =
+            p.facts.iter().chain(tree.spouse_links_of(&p.id).into_iter().flat_map(|l| l.facts.iter())).collect();
+        self.facts.iter().any(|form| {
+            form.input().is_err()
+                && all_facts.iter().find(|f| f.id == form.id).is_some_and(|f| f.date.display() != form.date)
+        })
+    }
+
     /// Differences between the form and the tree (invalid dates skipped).
     pub fn pending_edits(&self, tree: &Tree) -> Vec<FormEdit> {
         let Some(p) = tree.person(&self.person_id) else { return Vec::new() };
@@ -975,7 +986,11 @@ impl App {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 close = ui.button(RichText::new("Keep").strong()).clicked();
-                remove = ui.button("Remove link").clicked();
+                let label = match &unlink {
+                    Unlink::Parent { .. } => "Remove as parent",
+                    Unlink::Couple { .. } => "Remove partnership",
+                };
+                remove = ui.button(label).clicked();
             });
         });
         if remove {
@@ -987,7 +1002,10 @@ impl App {
             };
             if done.is_some() {
                 self.form = None;
-                self.toasts.undoable("Link removed");
+                self.toasts.undoable(match &unlink {
+                    Unlink::Parent { .. } => "Parent link removed",
+                    Unlink::Couple { .. } => "Partnership removed",
+                });
             }
         }
         if remove || close {

@@ -92,16 +92,14 @@ fn bottom(p: Pos2) -> Pos2 {
 
 /// Whether the parent→child link is anything but biological.
 fn is_adopted(tree: &Tree, parent: &str, child: &str) -> bool {
-    tree.parent_links
-        .iter()
-        .any(|l| l.parent == parent && l.child == child && !l.modifier.is_empty() && l.modifier != "Natural")
+    tree.parent_links_of(child).any(|l| l.parent == parent && !l.modifier.is_empty() && l.modifier != "Natural")
 }
 
 /// The main pair of parents to draw: biological links first, preferring a
 /// couple, father on the left. Returns the pair and the remaining parents.
 pub fn parent_pair(tree: &Tree, child: &str) -> (Vec<String>, Vec<String>) {
     let mut all: Vec<&str> = Vec::new();
-    for l in tree.parent_links.iter().filter(|l| l.child == child) {
+    for l in tree.parent_links_of(child) {
         if !all.contains(&l.parent.as_str()) {
             all.push(&l.parent);
         }
@@ -129,7 +127,8 @@ pub fn layout(tree: &Tree, focus: &str, settings: Settings) -> Layout {
     // ancestors
     let (pair, others) = parent_pair(tree, focus);
     if settings.ancestors > 0 {
-        place_ancestors(tree, focus, &pair, Pos2::ZERO, 1, settings.ancestors, &mut l);
+        let mut path = vec![focus.to_string()];
+        place_ancestors(tree, &pair, Pos2::ZERO, 1, settings.ancestors, &mut l, &mut path);
         // extra parents to the right of the ancestor block, dashed to the focus
         let mut x = l.bounds().right() + H_GAP + BOX.x / 2.0;
         for p in &others {
@@ -199,7 +198,9 @@ pub fn layout(tree: &Tree, focus: &str, settings: Settings) -> Layout {
 
         let widths: Vec<f32> = groups
             .iter()
-            .flat_map(|(_, ks)| ks.iter().map(|k| subtree_width(tree, k, 2, settings.descendants)))
+            .flat_map(|(_, ks)| {
+                ks.iter().map(|k| subtree_width(tree, k, 2, settings.descendants, &mut vec![focus.to_string()]))
+            })
             .collect();
         let total: f32 = widths.iter().sum();
         let centre = STEP * spouses.len() as f32 / 2.0;
@@ -212,7 +213,8 @@ pub fn layout(tree: &Tree, focus: &str, settings: Settings) -> Layout {
                 l.add(k, pos, Role::Descendant);
                 let adopted = is_adopted(tree, focus, k);
                 l.edges.push(Edge { from: *from, to: top(pos), kind: EdgeKind::Child { adopted } });
-                place_descendants(tree, k, pos, 2, settings.descendants, &mut l);
+                let mut path = vec![focus.to_string()];
+                place_descendants(tree, k, pos, 2, settings.descendants, &mut l, &mut path);
                 left += width;
             }
         }
@@ -238,28 +240,40 @@ fn parent_connector(l: &Layout, pair: &[String]) -> Option<Pos2> {
     }
 }
 
-fn ancestor_width(tree: &Tree, person: &str, generation: u32, max: u32) -> f32 {
+/// The parents to draw above `person`: the main pair, without anyone already on the path from the
+/// focus (parent links that loop back would otherwise be followed for ever).
+fn pair_off_path(tree: &Tree, person: &str, path: &[String]) -> Vec<String> {
+    let (pair, _) = parent_pair(tree, person);
+    pair.into_iter().filter(|p| !path.contains(p)).collect()
+}
+
+/// `path` holds the people from the focus up to `person`'s child.
+fn ancestor_width(tree: &Tree, person: &str, generation: u32, max: u32, path: &mut Vec<String>) -> f32 {
     if generation > max {
         return STEP;
     }
-    let (pair, _) = parent_pair(tree, person);
-    let sum: f32 = pair.iter().map(|p| ancestor_width(tree, p, generation + 1, max)).sum();
+    path.push(person.to_string());
+    let pair = pair_off_path(tree, person, path);
+    let sum: f32 = pair.iter().map(|p| ancestor_width(tree, p, generation + 1, max, path)).sum();
+    path.pop();
     sum.max(STEP)
 }
 
+/// Place `pair`, the parents of the last person on `path`, and their ancestors.
 fn place_ancestors(
     tree: &Tree,
-    child: &str,
     pair: &[String],
     child_pos: Pos2,
     generation: u32,
     max: u32,
     l: &mut Layout,
+    path: &mut Vec<String>,
 ) {
     if pair.is_empty() || generation > max {
         return;
     }
-    let widths: Vec<f32> = pair.iter().map(|p| ancestor_width(tree, p, generation + 1, max)).collect();
+    let child = path.last().expect("the focus is on the path").clone();
+    let widths: Vec<f32> = pair.iter().map(|p| ancestor_width(tree, p, generation + 1, max, path)).collect();
     let total: f32 = widths.iter().sum();
     let mut left = child_pos.x - total / 2.0;
     let y = -ROW * generation as f32;
@@ -282,38 +296,50 @@ fn place_ancestors(
         [a] => bottom(*a),
         _ => unreachable!("at most two parents"),
     };
-    let adopted = pair.iter().any(|p| is_adopted(tree, p, child));
+    let adopted = pair.iter().any(|p| is_adopted(tree, p, &child));
     l.edges.push(Edge { from, to: top(child_pos), kind: EdgeKind::Child { adopted } });
     for (p, pos) in pair.iter().zip(positions) {
-        let (grand, _) = parent_pair(tree, p);
-        place_ancestors(tree, p, &grand, pos, generation + 1, max, l);
+        path.push(p.clone());
+        let grand = pair_off_path(tree, p, path);
+        place_ancestors(tree, &grand, pos, generation + 1, max, l, path);
+        path.pop();
     }
 }
 
-fn subtree_width(tree: &Tree, id: &str, depth: u32, max: u32) -> f32 {
+/// The children to draw below `id`, without anyone already on the path from the focus.
+fn kids_off_path<'a>(tree: &'a Tree, id: &str, path: &[String]) -> Vec<&'a str> {
+    tree.children(id).into_iter().filter(|k| !path.iter().any(|p| p == k)).collect()
+}
+
+/// `path` holds the people from the focus down to `id`'s parent.
+fn subtree_width(tree: &Tree, id: &str, depth: u32, max: u32, path: &mut Vec<String>) -> f32 {
     if depth > max {
         return STEP;
     }
-    let sum: f32 = tree.children(id).iter().map(|k| subtree_width(tree, k, depth + 1, max)).sum();
+    path.push(id.to_string());
+    let sum: f32 = kids_off_path(tree, id, path).iter().map(|k| subtree_width(tree, k, depth + 1, max, path)).sum();
+    path.pop();
     sum.max(STEP)
 }
 
-fn place_descendants(tree: &Tree, id: &str, pos: Pos2, depth: u32, max: u32, l: &mut Layout) {
+fn place_descendants(tree: &Tree, id: &str, pos: Pos2, depth: u32, max: u32, l: &mut Layout, path: &mut Vec<String>) {
     if depth > max {
         return;
     }
-    let kids = tree.children(id);
-    let total: f32 = kids.iter().map(|k| subtree_width(tree, k, depth + 1, max)).sum();
+    path.push(id.to_string());
+    let kids = kids_off_path(tree, id, path);
+    let widths: Vec<f32> = kids.iter().map(|k| subtree_width(tree, k, depth + 1, max, path)).collect();
+    let total: f32 = widths.iter().sum();
     let mut left = pos.x - total / 2.0;
-    for kid in kids {
-        let w = subtree_width(tree, kid, depth + 1, max);
+    for (kid, w) in kids.into_iter().zip(widths) {
         let child_pos = Pos2::new(left + w / 2.0, pos.y + ROW);
         l.add(kid, child_pos, Role::Descendant);
         let adopted = is_adopted(tree, id, kid);
         l.edges.push(Edge { from: bottom(pos), to: top(child_pos), kind: EdgeKind::Child { adopted } });
-        place_descendants(tree, kid, child_pos, depth + 1, max, l);
+        place_descendants(tree, kid, child_pos, depth + 1, max, l, path);
         left += w;
     }
+    path.pop();
 }
 
 #[cfg(test)]
@@ -366,5 +392,62 @@ mod tests {
         let leo = l.nodes.iter().find(|n| n.id == id("Leo Lindqvist")).unwrap();
         assert!(leo.more_down, "Leo has a daughter beyond one generation");
         assert!(l.edges.iter().any(|e| e.kind == EdgeKind::Child { adopted: true }), "Nora is adopted");
+    }
+
+    /// A line of five people whose youngest is also the eldest's parent, as a damaged file
+    /// might have it (the editor refuses to make such a link).
+    #[test]
+    fn a_parent_loop_is_drawn_once_around() {
+        use familyx::doc::Element;
+        use familyx::edit;
+        let mut doc = edit::new_family_document();
+        let ids: Vec<String> =
+            (0..5).map(|i| edit::add_person(&mut doc, &format!("P{i}"), "Loop", Gender::Male)).collect();
+        for pair in ids.windows(2) {
+            edit::link_parent(&mut doc, &pair[1], &pair[0]).unwrap();
+        }
+        let link = Element::new("RelationshipLink")
+            .with_attr("xsi:type", "ParentChildLink")
+            .with_attr("Id", "loop")
+            .with_attr("Person1Id", &ids[4])
+            .with_attr("Person2Id", &ids[0]);
+        doc.root.child_mut("RelationshipCollection").unwrap().push(link);
+        let tree = Tree::from_doc(&doc);
+        let started = std::time::Instant::now();
+        for id in &ids {
+            let l = layout(&tree, id, Settings { ancestors: 30, descendants: 30 });
+            assert!(l.nodes.len() <= 2 * ids.len(), "{} nodes", l.nodes.len());
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    /// A full pedigree: person k has parents 2k+1 and 2k+2.
+    fn pedigree(generations: u32) -> (Tree, String) {
+        use familyx::edit;
+        let n = (1usize << (generations + 1)) - 1;
+        let mut doc = edit::new_family_document();
+        let ids: Vec<String> = (0..n)
+            .map(|i| {
+                let gender = if i % 2 == 1 { Gender::Male } else { Gender::Female };
+                edit::add_person(&mut doc, &format!("P{i}"), "X", gender)
+            })
+            .collect();
+        for k in 0..n {
+            for c in [2 * k + 1, 2 * k + 2].into_iter().filter(|&c| c < n) {
+                edit::link_parent(&mut doc, &ids[k], &ids[c]).unwrap();
+            }
+        }
+        (Tree::from_doc(&doc), ids[0].clone())
+    }
+
+    #[test]
+    fn a_big_pedigree_lays_out_quickly() {
+        let (tree, focus) = pedigree(12);
+        let started = std::time::Instant::now();
+        let l = layout(&tree, &focus, Settings { ancestors: 12, descendants: 2 });
+        let took = started.elapsed();
+        assert_eq!(l.nodes.len(), tree.people.len());
+        eprintln!("{} people, 12 generations: {took:?}", tree.people.len());
+        assert!(took < std::time::Duration::from_secs(3), "{took:?}");
     }
 }

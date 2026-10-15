@@ -169,10 +169,15 @@ fn derive_keys(password: &str, version: AesVersion, salt: &[u8]) -> Keys {
 }
 
 fn inflate(compressed: &[u8]) -> Result<Vec<u8>> {
-    let mut xml = Vec::with_capacity(compressed.len() * 5);
+    let limit = crate::limits::MAX_ENTRY;
+    let mut xml = Vec::with_capacity(compressed.len().saturating_mul(5).min(64 << 20));
     flate2::read::DeflateDecoder::new(compressed)
+        .take(limit + 1)
         .read_to_end(&mut xml)
         .map_err(|e| Error::Format(format!("cannot inflate tree data (wrong format or corrupt): {e}")))?;
+    if xml.len() as u64 > limit {
+        return Err(crate::limits::too_big("the tree data", limit));
+    }
     Ok(xml)
 }
 

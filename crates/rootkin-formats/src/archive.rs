@@ -2,15 +2,15 @@
 //! and plain `.zip` files that hold one `.ged` or `.gramps`.
 
 use std::cell::RefCell;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use familyx::Package;
 use zip::ZipArchive;
 
 use crate::{Error, Format, ImportReport, Result};
 
-/// Largest single file read out of an archive (guards against zip bombs).
-const MAX_ENTRY: u64 = 1 << 30;
+/// Largest single file read out of an archive, and all of them together (guards against zip bombs).
+use familyx::limits::{MAX_ENTRY, MAX_TOTAL};
 
 /// Whether the bytes are a zip file (also what a `.familyx` package is).
 pub fn is_zip(bytes: &[u8]) -> bool {
@@ -38,10 +38,8 @@ fn normalize(reference: &str) -> String {
 }
 
 fn read_entry(zip: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let mut entry = zip.by_name(name).ok()?;
-    let mut data = Vec::new();
-    entry.by_ref().take(MAX_ENTRY).read_to_end(&mut data).ok()?;
-    Some(data)
+    let entry = zip.by_name(name).ok()?;
+    familyx::limits::read_limited(entry, MAX_ENTRY, name).ok()
 }
 
 /// Import the family tree file inside a zip, resolving photos from the
@@ -68,15 +66,29 @@ pub fn import(bytes: &[u8]) -> Result<(Package, ImportReport)> {
     // media paths are relative to the tree file's folder, or the archive root
     let dir = chosen.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
     let zip = RefCell::new(zip);
+    // each file is read once; the same file is stored once in the tree (see `import_photo`)
+    let read = RefCell::new((std::collections::HashMap::<String, Vec<u8>>::new(), data.len() as u64));
     let lookup = |reference: &str| {
         let wanted = normalize(reference);
         let file_name = wanted.rsplit('/').next().unwrap_or(&wanted).to_string();
         let beside = normalize(&format!("{dir}/{wanted}"));
         let by_name = names.iter().find(|n| n.rsplit('/').next() == Some(file_name.as_str()));
-        let found = [Some(beside.as_str()), Some(wanted.as_str()), by_name.map(String::as_str)]
-            .into_iter()
-            .flatten()
-            .find_map(|n| read_entry(&mut zip.borrow_mut(), n));
+        let mut read = read.borrow_mut();
+        let (cache, total) = &mut *read;
+        let candidates = [Some(beside.as_str()), Some(wanted.as_str()), by_name.map(String::as_str)];
+        let found = candidates.into_iter().flatten().find_map(|n| {
+            if let Some(bytes) = cache.get(n) {
+                return Some(bytes.clone());
+            }
+            let bytes = read_entry(&mut zip.borrow_mut(), n)?;
+            *total += bytes.len() as u64;
+            // past the limit, further photos are left out (reported as not found)
+            if *total > MAX_TOTAL {
+                return None;
+            }
+            cache.insert(n.to_string(), bytes.clone());
+            Some(bytes)
+        });
         found
     };
     let (pkg, mut report) = crate::import_with(&data, format, &lookup)?;

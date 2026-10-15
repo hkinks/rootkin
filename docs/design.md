@@ -308,6 +308,16 @@ files; 14.2 is implemented (story database), 14.1 and 14.3 are not yet.
 - Child has `FamilyChildLink` → parents' `SpouseLink` when both parents are a couple.
 - Media: `PackagedFile` (`RelativePath` `Multimedia\x.png`), person `PrimaryImageId`.
 
+### Media files
+
+Edits never delete a package part, so undo (which restores the document) always finds the file again. "Remove
+photo" detaches the photo and removes its `PackagedFile` record when nothing outside `PackagedFileCollection`
+names the media id any more (person and couple `Multimedia`, fact and source media, `FamilyCrestId`, stories,
+unknown elements). Saving (`Package::unreferenced_media`) leaves out parts under `Multimedia/` whose file name no
+text or attribute anywhere in the tree mentions, with their relationship and content-type entries; any mention
+keeps the part, and parts elsewhere (`stories7`, unknown parts) are always kept. This also cleans up after undoing
+"Add photo" or "Import into this tree".
+
 ## Sources, repositories, citations (derived from the app's classes, not from real files)
 
 No sample file with sources was available. The schema below was read from the vendor's
@@ -354,7 +364,7 @@ content. A source (same title, short title, author, publisher, call number and n
 already exists is reused and not copied. Photo parts get new `Multimedia/<guid>.<ext>` names, `RelativePath` is rewritten
 and the part and its package relationship are added. The target's own records, home person and author are untouched;
 `AuthorCollection`, `TaskCollection` and `FamilyProperties` of the other file are not carried. Undo restores the
-document only, so photo files stay unreferenced in the package (as after removing a photo).
+document only; the photo files stay in the package until the next save leaves them out (see "Media files" below).
 
 **Duplicates** (`duplicates::find_duplicates`): names are folded (case, diacritics, punctuation) and compared as sorted
 word sets, alternate names included. Candidates need birth years at most 2 apart, or one missing (then the name needs two
@@ -368,31 +378,59 @@ apart (10 if one is missing), 5 for the same death year, 10 each for a shared pa
 | --- | --- |
 | `PersonNameCollection` | names with the same words, suffix and nickname are not repeated; others become alternate names (`IsPrimary` removed). The removed primary name becomes primary only when chosen (`name_from`), then the kept primary becomes an alternate |
 | `Biology/Gender` | kept person's, unless unknown or `gender_from` says otherwise (unknown never overrules known) |
+| other `Biology` members | the `YDNA`/`MtDNA` entries of both, without repeats; other members only when the kept person has none |
 | `Facts` | an event with the same tag, kind, date, place and details is not repeated but gives its citations and notes to the existing one; others are added, without `IsPrimary` when the kept person already has that tag |
 | `Notes`, `PersonCitationCollection` | added unless the same text, or the same source and page, is already there |
 | `Multimedia`, `PrimaryImageId`, `Face` | photo ids added; the removed primary photo (and face) is taken only if the kept person has none |
 | `IsLiving` | dropped when the removed person has a death event |
-| other children (`Associations`, `Tags`, unknown elements) | moved when the kept person has no element of that name |
+| `Associations`, `Tags`, `CustomIds` | entries added unless an equal one (ignoring record id and timestamps) is there; an association with the kept person themselves is dropped |
+| other children (unknown elements) | moved when the kept person has no element of that name |
+| `Association/PersonId` anywhere (godparents, witnesses, sponsors on people, facts and couples) | point to the kept person |
 | `ParentChildLink` | `Person1Id`/`Person2Id` repointed; a link the kept person already has is dropped (its `ParentChildModifier` is copied when empty) |
-| `SpouseLink` | repointed; with a partner the kept person already has, the facts, status and unknown children move onto the existing link and the other link is deleted, with `FamilyId` references redirected and deduplicated |
+| `SpouseLink` | repointed; with a partner the kept person already has, the facts, status, notes (without repeats), `Multimedia`/`LDSFacts` entries and other children move onto the existing link and the other link is deleted, with `FamilyId` references redirected and deduplicated |
 | `FamilySpouseLinks`, `FamilyChildLinks` | entries move over with `SpouseId`/`ChildId` set to the kept person, one per `FamilyId` |
 | links between the two people | deleted |
 | `HomePersonId`, `LastSavedPersonId` | point to the kept person |
 
+Deleting a person (`edit::delete_person`) removes `PersonId` from associations that name them and keeps (or fills in)
+`PersonName`, so a godparent stays a name. `edit::check` reports associations naming a missing person.
+
 After the removed person is deleted (`edit::delete_person`), children of the kept person with both members of a couple
-as parents get their `FamilyChildLink` to that couple. Not handled: a merge that makes a person their own ancestor
-(the two were more distant relatives) is not detected; a citation's quality and notes are not compared.
+as parents get their `FamilyChildLink` to that couple. A merge that would make the person their own ancestor
+(one descends from the other through someone else) is refused, as is `edit::link_parent` closing a loop of any
+length (`edit::is_ancestor`); the tree layout also skips anyone already on the path it follows. Not handled: a citation's quality and notes are not compared.
 
 ## Architecture
 
 - `crates/familyx`: `codec` (crypto, all tree variants), `protection` (`FamilyId`), `doc` (lossless XML tree, byte-exact round-trip),
-  `package` (OPC zip, atomic save + `.bak`), `model` (read-only `Tree` snapshot rebuilt
+  `package` (OPC zip, atomic save + `.bak`: a uniquely named temp file, synced to disk with its folder before it replaces the file), `model` (read-only `Tree` snapshot rebuilt
   after each edit), edits mutate the `doc` directly so unknown data survives.
 - `crates/rootkin-cli`: `dump`, `pack`, `roundtrip`, `summary`, `check`, `example`, `import`, `export`.
 - `crates/rootkin-formats`: GEDCOM and Gramps XML import/export (see below).
 - `crates/rootkin`: egui app: people list, tree canvas, person panel.
+- Background jobs (open, save, import): one at a time. Each carries the tree's generation (bumped on every
+  load) and version (bumped on every edit) from when it started; a result for another tree is ignored, and
+  Open/Import results also when the tree changed meanwhile. While a job runs, a modal blocks editing and file
+  actions (invisible for the first 400 ms so quick jobs don't flash). The action waiting behind "Save your
+  changes?" runs only after the save started by that answer, and only if nothing changed since. Closing the
+  window with unsaved changes always asks. A panicking job reports back instead of staying busy.
 
 New elements must follow XmlSerializer child order (see `ensure_child`).
+
+### Limits for untrusted input (`familyx::limits`)
+
+A damaged or hostile file gives an error naming the problem instead of crashing or exhausting memory:
+
+- XML (`.familyx` tree, Gramps) and GEDCOM records nested more than 256 levels are refused (the app's trees
+  nest about 10). Writing, cloning and dropping the tree recurse, so this keeps them off the stack limit.
+- Every zip entry, the inflated tree part and a gunzipped Gramps file are read through a limit of 1 GB each,
+  and a `.familyx` package unpacks to at most 2 GB in total. Sizes declared in the zip are never used to
+  allocate.
+- Zipped imports (`.gdz`, `.zip`): each entry is read once (1 GB per file); photos beyond 2 GB in total are
+  left out and reported as not found. A file referenced several times is stored once and shared
+  (`Package::photo_with_bytes`).
+- The story database reader (`litedb`) reads every index node, document and extend page at most once and
+  refuses BSON nested more than 32 levels; RTF notes are read character-safe.
 
 ## Import/export formats (`rootkin-formats`)
 

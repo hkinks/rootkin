@@ -16,14 +16,37 @@ use crate::tree_view::{NavState, TreeAction, TreeView};
 
 const UNDO_LIMIT: usize = 100;
 
-/// A finished background job.
-enum Job {
+/// How long a background job may run before the "Working" overlay shows. Input is blocked
+/// from the start; the delay only keeps quick jobs on small trees from flashing a dialog.
+const WORKING_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// The result of a background job.
+pub(crate) enum Job {
     Opened(PathBuf, Result<Package, String>),
     /// A converted genealogy file and a summary of what came in.
     Imported(PathBuf, Result<(Package, crate::formats::ImportReport), String>),
     /// The same, to be added to the open tree.
     ImportedInto(PathBuf, Result<(Package, crate::formats::ImportReport), String>),
-    Saved(PathBuf, u64, Result<(), String>),
+    Saved(PathBuf, Result<(), String>),
+    /// The job panicked; what it was doing.
+    Crashed(String),
+}
+
+/// A finished job with the state of the app when it started.
+struct Finished {
+    id: u64,
+    /// [`App::generation`] when the job started: which tree it belongs to.
+    generation: u64,
+    /// [`App::version`] when the job started (for a save: the version it wrote).
+    version: u64,
+    job: Job,
+}
+
+/// The job that is running. Only one runs at a time, and editing and file actions wait for it.
+struct Busy {
+    id: u64,
+    label: String,
+    since: std::time::Instant,
 }
 
 pub struct App {
@@ -52,12 +75,18 @@ pub struct App {
     redo: Vec<(String, Document)>,
     /// Bumped on every change; a save records which version it wrote.
     pub(crate) version: u64,
-    saved_version: u64,
-    confirm_close: bool,
+    pub(crate) saved_version: u64,
+    pub(crate) confirm_close: bool,
     /// Something to do once unsaved changes are dealt with.
-    pending: Option<Pending>,
-    busy: Option<String>,
-    jobs: (mpsc::Sender<Job>, mpsc::Receiver<Job>),
+    pub(crate) pending: Option<Pending>,
+    /// The save started by answering "Save" to the question about unsaved changes; the
+    /// waiting action runs when this save (and no other) has finished.
+    pending_save: Option<u64>,
+    busy: Option<Busy>,
+    next_job: u64,
+    /// Bumped whenever another tree is loaded; jobs started for an earlier tree are ignored.
+    generation: u64,
+    jobs: (mpsc::Sender<Finished>, mpsc::Receiver<Finished>),
     pub(crate) recent: Vec<PathBuf>,
     /// The person panel on the right; hide it to give the tree the room.
     pub(crate) show_person_panel: bool,
@@ -86,8 +115,8 @@ struct ImportedInto {
     likely_duplicates: usize,
 }
 
-#[derive(Clone)]
-enum Pending {
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Pending {
     Close,
     Open(PathBuf),
     Import(PathBuf),
@@ -122,7 +151,10 @@ impl App {
             saved_version: 0,
             confirm_close: false,
             pending: None,
+            pending_save: None,
             busy: None,
+            next_job: 0,
+            generation: 0,
             jobs: mpsc::channel(),
             recent: crate::recent::load(),
             show_person_panel: true,
@@ -148,86 +180,154 @@ impl App {
         self.busy.is_some()
     }
 
-    fn dirty(&self) -> bool {
-        self.pkg.is_some() && self.version != self.saved_version
+    /// Unsaved changes, counting a date in the form that can't be understood (and so isn't in the tree).
+    pub(crate) fn dirty(&self) -> bool {
+        self.pkg.is_some() && (self.version != self.saved_version || self.invalid_date_in_form())
+    }
+
+    fn invalid_date_in_form(&self) -> bool {
+        self.form.as_ref().is_some_and(|f| f.has_invalid_date(&self.tree))
+    }
+
+    /// True (with a message) when the form holds a date that can't be understood.
+    fn refuse_invalid_date(&mut self) -> bool {
+        if !self.invalid_date_in_form() {
+            return false;
+        }
+        self.toasts.error("A date in the form can't be understood. Correct it or clear it first.");
+        true
     }
 
     // ------------------------------------------------------------ files
 
+    /// Run `work` off the UI thread as the one background job. Returns its id, or `None` if
+    /// another job is still running. A panic in `work` is reported instead of leaving the app busy.
+    pub(crate) fn spawn_job(&mut self, label: String, work: impl FnOnce() -> Job + Send + 'static) -> Option<u64> {
+        if self.busy.is_some() {
+            return None;
+        }
+        self.next_job += 1;
+        let id = self.next_job;
+        let (generation, version) = (self.generation, self.version);
+        let (tx, ctx, what) = (self.jobs.0.clone(), self.ctx.clone(), label.clone());
+        self.busy = Some(Busy { id, label, since: std::time::Instant::now() });
+        std::thread::spawn(move || {
+            let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or(Job::Crashed(what));
+            let _ = tx.send(Finished { id, generation, version, job });
+            ctx.request_repaint();
+        });
+        Some(id)
+    }
+
     /// Opening and saving derive keys with 210k PBKDF2 rounds; run them off
     /// the UI thread.
     pub(crate) fn start_open(&mut self, path: PathBuf) {
-        let tx = self.jobs.0.clone();
-        self.busy = Some(format!("Opening {}…", file_name(&path)));
-        std::thread::spawn(move || {
+        let label = format!("Opening {}…", file_name(&path));
+        self.spawn_job(label, move || {
             let result = Package::open(&path).map_err(|e| e.to_string());
-            let _ = tx.send(Job::Opened(path, result));
+            Job::Opened(path, result)
         });
     }
 
-    fn start_save(&mut self, path: PathBuf) {
+    /// Save in the background; returns the job id (`None` if another job is running).
+    pub(crate) fn start_save(&mut self, path: PathBuf) -> Option<u64> {
+        if self.busy.is_some() || self.refuse_invalid_date() {
+            return None;
+        }
         self.flush_form();
-        let Some(pkg) = &mut self.pkg else { return };
+        let pkg = self.pkg.as_mut()?;
         edit::touch_file(&mut pkg.doc, self.selected.as_deref());
         let pkg = pkg.clone();
-        let version = self.version;
-        let tx = self.jobs.0.clone();
-        self.busy = Some(format!("Saving {}…", file_name(&path)));
-        std::thread::spawn(move || {
+        self.spawn_job(format!("Saving {}…", file_name(&path)), move || {
             let result = pkg.save(&path).map_err(|e| e.to_string());
-            let _ = tx.send(Job::Saved(path, version, result));
-        });
+            Job::Saved(path, result)
+        })
     }
 
     fn poll_jobs(&mut self, ctx: &egui::Context) {
         if self.busy.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
-        while let Ok(job) = self.jobs.1.try_recv() {
+        while let Ok(done) = self.jobs.1.try_recv() {
+            if self.busy.as_ref().map(|b| b.id) != Some(done.id) {
+                continue;
+            }
             self.busy = None;
-            match job {
-                Job::Opened(path, Ok(pkg)) => {
-                    self.notice = migration_notice(&pkg);
-                    let converted = self.notice.is_some();
-                    self.load(pkg, Some(path));
-                    if converted {
-                        // the converted tree only exists in memory until the first save
-                        self.converted = true;
-                        self.saved_version = u64::MAX;
+            self.finish_job(done);
+        }
+    }
+
+    fn finish_job(&mut self, done: Finished) {
+        // the job belongs to the tree that is open, and that tree hasn't changed since it started
+        let same_tree = done.generation == self.generation;
+        let unchanged = same_tree && done.version == self.version;
+        match done.job {
+            // opening or importing would replace changes made in the meantime; adding to a
+            // tree only needs it to still be open
+            Job::Opened(path, _) | Job::Imported(path, _) if !unchanged => self.stale_result(&path),
+            Job::ImportedInto(path, _) if !same_tree => self.stale_result(&path),
+            Job::Opened(path, Ok(pkg)) => {
+                self.notice = migration_notice(&pkg);
+                let converted = self.notice.is_some();
+                self.load(pkg, Some(path));
+                if converted {
+                    // the converted tree only exists in memory until the first save
+                    self.converted = true;
+                    self.saved_version = u64::MAX;
+                }
+            }
+            Job::Opened(path, Err(e)) => {
+                self.error_dialog = Some(crate::problems::cannot_open(&path, &e));
+            }
+            Job::Imported(path, Ok((pkg, summary))) => {
+                self.load(pkg, None);
+                self.saved_version = u64::MAX;
+                let save_name = crate::formats::suggested_save_name(&summary, &path);
+                self.imported_from = Some((file_name(&path), save_name));
+                self.import_summary = Some((file_name(&path), summary));
+            }
+            Job::ImportedInto(path, Ok((other, summary))) => self.finish_import_into(&path, other, summary),
+            Job::Imported(path, Err(e)) | Job::ImportedInto(path, Err(e)) => {
+                self.error_dialog = Some(crate::problems::cannot_import(&path, &e));
+            }
+            Job::Saved(path, Ok(())) => {
+                crate::recent::remember(&mut self.recent, &path);
+                self.toasts.info(format!("Saved {}. The previous version is kept as .bak", file_name(&path)));
+                if same_tree {
+                    self.saved_version = done.version;
+                    self.converted = false;
+                    self.path = Some(path);
+                }
+                if self.pending_save.take() == Some(done.id) {
+                    if same_tree && !self.dirty() {
+                        self.run_pending();
+                    } else if self.pending.is_some() {
+                        // changed since the question was answered: ask again
+                        self.confirm_close = true;
                     }
                 }
-                Job::Opened(path, Err(e)) => {
-                    self.error_dialog = Some(crate::problems::cannot_open(&path, &e));
-                }
-                Job::Imported(path, Ok((pkg, summary))) => {
-                    self.load(pkg, None);
-                    self.saved_version = u64::MAX;
-                    let save_name = crate::formats::suggested_save_name(&summary, &path);
-                    self.imported_from = Some((file_name(&path), save_name));
-                    self.import_summary = Some((file_name(&path), summary));
-                }
-                Job::ImportedInto(path, Ok((other, summary))) => self.finish_import_into(&path, other, summary),
-                Job::Imported(path, Err(e)) | Job::ImportedInto(path, Err(e)) => {
-                    self.error_dialog = Some(crate::problems::cannot_import(&path, &e));
-                }
-                Job::Saved(path, version, Ok(())) => {
-                    self.saved_version = version;
-                    self.converted = false;
-                    crate::recent::remember(&mut self.recent, &path);
-                    self.toasts.info(format!("Saved {}. The previous version is kept as .bak", file_name(&path)));
-                    self.path = Some(path);
-                    self.after_save();
-                }
-                Job::Saved(path, _, Err(e)) => {
-                    self.pending = None;
-                    self.error_dialog = Some(crate::problems::cannot_save(&path, &e));
-                }
+            }
+            Job::Saved(path, Err(e)) => {
+                self.pending = None;
+                self.pending_save = None;
+                self.error_dialog = Some(crate::problems::cannot_save(&path, &e));
+            }
+            Job::Crashed(what) => {
+                self.pending = None;
+                self.pending_save = None;
+                let what = what.trim_end_matches('…');
+                self.toasts.error(format!("Something went wrong ({what}). Please try again."));
             }
         }
     }
 
-    /// Continue whatever was waiting for the save.
-    fn after_save(&mut self) {
+    fn stale_result(&mut self, path: &Path) {
+        self.toasts.error(format!("{} was not loaded because the tree changed in the meantime", file_name(path)));
+    }
+
+    /// Continue whatever was waiting for the unsaved changes to be dealt with.
+    fn run_pending(&mut self) {
+        self.pending_save = None;
         match self.pending.take() {
             Some(Pending::Close) => self.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Some(Pending::Open(path)) => self.start_open(path),
@@ -238,6 +338,8 @@ impl App {
     }
 
     pub(crate) fn load(&mut self, pkg: Package, path: Option<PathBuf>) {
+        self.generation += 1;
+        self.pending_save = None;
         self.tree = Tree::from_doc(&pkg.doc);
         self.tree_epoch += 1;
         self.selected = self.tree.home_person.clone().or_else(|| self.tree.people.first().map(|p| p.id.clone()));
@@ -264,6 +366,9 @@ impl App {
 
     /// The made-up example family, as a new tree that is not saved yet.
     fn try_example(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
         match rootkin_formats::example::build() {
             Ok(pkg) => {
                 self.load(pkg, None);
@@ -274,36 +379,52 @@ impl App {
     }
 
     fn new_tree(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
         self.load(Package::new(), None);
         self.saved_version = 0;
         self.relation_dialog = Some(RelationDialog::new_unrelated());
     }
 
     /// Run `then` now, or after asking to save unsaved changes.
-    fn guarded(&mut self, then: Pending) {
+    pub(crate) fn guarded(&mut self, then: Pending) {
+        if self.busy.is_some() {
+            return;
+        }
         self.flush_form();
         self.pending = Some(then);
+        self.pending_save = None;
         if self.dirty() {
             self.confirm_close = true;
         } else {
-            self.after_save();
+            self.run_pending();
         }
     }
 
     fn pick_open(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
         if let Some(path) = rfd::FileDialog::new().add_filter("Family tree", &["familyx"]).pick_file() {
             self.guarded(Pending::Open(path));
         }
     }
 
-    fn save(&mut self) {
+    /// Save to the current file, or ask for one. Returns the id of the save job.
+    fn save(&mut self) -> Option<u64> {
         match self.path.clone() {
             Some(path) => self.start_save(path),
             None => self.pick_save_as(),
         }
     }
 
-    fn pick_save_as(&mut self) {
+    fn pick_save_as(&mut self) -> Option<u64> {
+        if self.busy.is_some() || self.refuse_invalid_date() {
+            self.pending = None;
+            return None;
+        }
+        self.flush_form();
         let mut dialog = rfd::FileDialog::new().add_filter("Family tree", &["familyx"]);
         let suggestion = match (&self.path, &self.imported_from) {
             (Some(path), _) => path.file_name().map(|n| n.to_string_lossy().into_owned()),
@@ -316,9 +437,12 @@ impl App {
                 if path.extension().is_none() {
                     path.set_extension("familyx");
                 }
-                self.start_save(path);
+                self.start_save(path)
             }
-            None => self.pending = None,
+            None => {
+                self.pending = None;
+                None
+            }
         }
     }
 
@@ -354,7 +478,12 @@ impl App {
         let (x0, y0) = ((r.min.x * scale) as u32, (r.min.y * scale) as u32);
         let (w, h) = ((r.width() * scale) as u32, (r.height() * scale) as u32);
         let [iw, ih] = image.size;
-        let mut out = image::RgbaImage::new(w.min(iw as u32 - x0), h.min(ih as u32 - y0));
+        let (w, h) = (w.min((iw as u32).saturating_sub(x0)), h.min((ih as u32).saturating_sub(y0)));
+        if w == 0 || h == 0 {
+            self.toasts.error("Export failed: the tree is not visible in the window");
+            return;
+        }
+        let mut out = image::RgbaImage::new(w, h);
         for (x, y, px) in out.enumerate_pixels_mut() {
             let c = image.pixels[(y0 + y) as usize * iw + (x0 + x) as usize];
             *px = image::Rgba([c.r(), c.g(), c.b(), 255]);
@@ -389,6 +518,9 @@ impl App {
     /// Run an edit with an undo snapshot labelled `label`. On failure the
     /// document is restored and the error shown.
     pub(crate) fn apply<T>(&mut self, label: &str, edit: impl FnOnce(&mut Document) -> EditResult<T>) -> Option<T> {
+        if self.refuse_while_busy() {
+            return None;
+        }
         let pkg = self.pkg.as_mut()?;
         let snapshot = pkg.doc.clone();
         match edit(&mut pkg.doc) {
@@ -411,13 +543,15 @@ impl App {
         label: &str,
         edit: impl FnOnce(&mut Package) -> familyx::Result<T>,
     ) -> Option<T> {
+        if self.refuse_while_busy() {
+            return None;
+        }
         let pkg = self.pkg.as_mut()?;
-        // photo parts aren't snapshotted; undo restores references only
+        // photo files stay in the package; saving leaves out the ones no record refers to
         let snapshot = pkg.doc.clone();
         match edit(pkg) {
             Ok(value) => {
                 self.push_undo(label, snapshot);
-                self.photos.clear();
                 self.after_change();
                 Some(value)
             }
@@ -429,6 +563,13 @@ impl App {
         }
     }
 
+    /// True (with a message) while a background job runs: edits wait for it.
+    fn refuse_while_busy(&mut self) -> bool {
+        let Some(busy) = &self.busy else { return false };
+        self.toasts.error(format!("Please wait: {}", busy.label));
+        true
+    }
+
     fn push_undo(&mut self, label: &str, snapshot: Document) {
         self.undo.push((label.to_string(), snapshot));
         if self.undo.len() > UNDO_LIMIT {
@@ -438,6 +579,9 @@ impl App {
     }
 
     pub(crate) fn undo(&mut self, redo: bool) {
+        if self.refuse_while_busy() {
+            return;
+        }
         self.flush_form();
         let (from, to) = if redo { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
         let (Some(pkg), Some((label, doc))) = (self.pkg.as_mut(), from.pop()) else { return };
@@ -466,6 +610,9 @@ impl App {
 
     /// Commit text the user is still typing (before saving, undo, navigation).
     pub(crate) fn flush_form(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
         let Some(form) = self.form.take() else { return };
         let person = form.person_id().to_string();
         let edits = form.pending_edits(&self.tree);
@@ -477,7 +624,7 @@ impl App {
 
     /// Select a person and centre the tree on them, keeping history.
     pub(crate) fn select(&mut self, id: &str) {
-        if self.selected.as_deref() == Some(id) {
+        if self.selected.as_deref() == Some(id) || self.refuse_invalid_date() {
             return;
         }
         self.flush_form();
@@ -489,6 +636,9 @@ impl App {
     }
 
     fn go_back(&mut self, forward: bool) {
+        if self.refuse_invalid_date() {
+            return;
+        }
         self.flush_form();
         let (from, to) =
             if forward { (&mut self.future, &mut self.history) } else { (&mut self.history, &mut self.future) };
@@ -533,7 +683,6 @@ impl App {
             self.pick_open();
         }
         if save_as && self.pkg.is_some() {
-            self.flush_form();
             self.pick_save_as();
         } else if save && self.pkg.is_some() {
             self.save();
@@ -611,7 +760,6 @@ impl App {
                     self.save();
                 }
                 if ui.add_enabled(has, egui::Button::new("Save as…").shortcut_text("Ctrl+Shift+S")).clicked() {
-                    self.flush_form();
                     self.pick_save_as();
                 }
                 if ui
@@ -649,10 +797,10 @@ impl App {
                             self.export_format("gramps", Format::Gramps);
                         }
                         ui.separator();
-                        if ui.button("Tree as image (SVG)…").clicked() {
+                        if ui.button("Tree as SVG image…").clicked() {
                             self.export_svg();
                         }
-                        if ui.button("Tree as picture (PNG)…").clicked() {
+                        if ui.button("Tree as PNG image…").clicked() {
                             self.export_png(&ctx);
                         }
                     });
@@ -714,7 +862,13 @@ impl App {
                     .on_hover_text("Hide it on a small screen to give the tree more room");
                 ui.separator();
                 egui::widgets::global_theme_preference_buttons(ui);
-                ui.label("Text size: Ctrl + / Ctrl −");
+                // text size, also with Ctrl + and Ctrl - (shortcut shown on the buttons)
+                if ui.add(egui::Button::new("Larger text").shortcut_text("Ctrl +")).clicked() {
+                    egui::gui_zoom::zoom_in(ui.ctx());
+                }
+                if ui.add(egui::Button::new("Smaller text").shortcut_text("Ctrl -")).clicked() {
+                    egui::gui_zoom::zoom_out(ui.ctx());
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("About Rootkin").clicked() {
@@ -757,7 +911,7 @@ impl App {
             }
             if let Some(busy) = &self.busy {
                 ui.spinner();
-                ui.label(busy);
+                ui.label(&busy.label);
             }
         });
     }
@@ -792,7 +946,7 @@ impl App {
                         .on_hover_text(path.display().to_string())
                         .clicked()
                     {
-                        self.start_open(path.clone());
+                        self.guarded(Pending::Open(path.clone()));
                     }
                     let folder = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
                     ui.label(RichText::new(folder).weak().small());
@@ -825,13 +979,19 @@ impl App {
         // unsaved changes before close/open/new
         if ctx.input(|i| i.viewport().close_requested()) {
             self.flush_form();
-            if self.dirty() && !self.confirm_close {
+            if self.dirty() {
+                // always ask, also when the question is already showing for something else
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.pending = Some(Pending::Close);
-                self.confirm_close = true;
+                let saving_to_close = self.pending == Some(Pending::Close) && self.pending_save.is_some();
+                if !saving_to_close {
+                    self.pending = Some(Pending::Close);
+                    self.pending_save = None;
+                    self.confirm_close = true;
+                }
             }
         }
-        if self.confirm_close {
+        // the question waits until a running job is done, so that its answer can act
+        if self.confirm_close && self.busy.is_none() {
             let mut choice = None;
             egui::Modal::new(egui::Id::new("confirm_close")).show(ctx, |ui| {
                 ui.heading("Save your changes?");
@@ -852,12 +1012,21 @@ impl App {
             match choice {
                 Some(0) => {
                     self.confirm_close = false;
-                    self.save();
+                    let waiting = self.pending.clone();
+                    match self.save() {
+                        Some(id) => {
+                            self.pending = waiting;
+                            self.pending_save = Some(id);
+                        }
+                        None => self.pending = None,
+                    }
                 }
                 Some(1) => {
                     self.confirm_close = false;
                     self.saved_version = self.version;
-                    self.after_save();
+                    // a date that can't be understood is dropped with the rest
+                    self.form = None;
+                    self.run_pending();
                 }
                 Some(_) => {
                     self.confirm_close = false;
@@ -994,7 +1163,6 @@ impl App {
             if let Some(save) = choice {
                 self.import_summary = None;
                 if save {
-                    self.flush_form();
                     self.pick_save_as();
                 }
             }
@@ -1023,6 +1191,9 @@ impl App {
     /// Pick a file, then import it once unsaved changes are dealt with.
     fn import(&mut self, ctx: &egui::Context) {
         let _ = ctx;
+        if self.busy.is_some() {
+            return;
+        }
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Genealogy files", &["ged", "gedcom", "gramps", "xml", "gdz", "zip"])
             .pick_file()
@@ -1055,16 +1226,17 @@ impl App {
 
     /// Converting a big file takes a while; do it off the UI thread.
     fn start_import(&mut self, path: PathBuf) {
-        let tx = self.jobs.0.clone();
-        self.busy = Some(format!("Importing {}…", file_name(&path)));
-        std::thread::spawn(move || {
+        self.spawn_job(format!("Importing {}…", file_name(&path)), move || {
             let result = crate::formats::import(&path);
-            let _ = tx.send(Job::Imported(path, result));
+            Job::Imported(path, result)
         });
     }
 
     /// Pick a file and add its people to the open tree. Nothing is replaced, so no questions asked.
     fn import_into(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Genealogy files", &["ged", "gedcom", "gramps", "xml", "gdz", "zip"])
             .pick_file()
@@ -1076,11 +1248,9 @@ impl App {
 
     pub(crate) fn start_import_into(&mut self, path: PathBuf) {
         self.flush_form();
-        let tx = self.jobs.0.clone();
-        self.busy = Some(format!("Reading {}…", file_name(&path)));
-        std::thread::spawn(move || {
+        self.spawn_job(format!("Reading {}…", file_name(&path)), move || {
             let result = crate::formats::import(&path);
-            let _ = tx.send(Job::ImportedInto(path, result));
+            Job::ImportedInto(path, result)
         });
     }
 
@@ -1225,7 +1395,9 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.poll_jobs(&ctx);
         self.handle_screenshot(&ctx);
-        self.shortcuts(&ctx);
+        if self.busy.is_none() {
+            self.shortcuts(&ctx);
+        }
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
 
         // toasts sit at the bottom of the central area, clear of the side panels
@@ -1247,7 +1419,7 @@ impl eframe::App for App {
                 let nav = NavState { can_back: !self.history.is_empty(), can_forward: !self.future.is_empty() };
                 let (pkg, photos, tree) = (self.pkg.as_ref().expect("checked"), &mut self.photos, &self.tree);
                 let mut photo = |p: &Person| photos.face(&ctx, pkg, tree, p);
-                match self.tree_view.ui(ui, &self.tree, &focus, nav, &mut photo) {
+                match self.tree_view.ui(ui, &self.tree, self.tree_epoch, &focus, nav, &mut photo) {
                     Some(TreeAction::Focus(id)) => self.select(&id),
                     Some(TreeAction::Back) => self.go_back(false),
                     Some(TreeAction::Forward) => self.go_back(true),
@@ -1261,9 +1433,37 @@ impl eframe::App for App {
         self.unlink_dialog_ui(&ctx);
         self.merge_dialogs(&ctx);
         self.dialogs(&ctx);
+        self.working_overlay(&ctx);
         if self.toasts.show(&ctx, central) {
             self.undo(false);
         }
+    }
+}
+
+impl App {
+    /// While a job runs, a modal blocks the rest of the window. It stays invisible for a moment
+    /// so that quick jobs don't flash a dialog.
+    fn working_overlay(&mut self, ctx: &egui::Context) {
+        let Some(busy) = &self.busy else { return };
+        if let Some(id) = ctx.memory(|m| m.focused()) {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+        let visible = busy.since.elapsed() >= WORKING_OVERLAY_DELAY;
+        if !visible {
+            ctx.request_repaint_after(WORKING_OVERLAY_DELAY);
+        }
+        let modal = egui::Modal::new(egui::Id::new("working"));
+        let modal = if visible { modal } else { modal.backdrop_color(Color32::TRANSPARENT).frame(egui::Frame::NONE) };
+        let label = busy.label.clone();
+        modal.show(ctx, |ui| {
+            if visible {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.heading(label);
+                });
+                ui.label("Please wait a moment.");
+            }
+        });
     }
 }
 

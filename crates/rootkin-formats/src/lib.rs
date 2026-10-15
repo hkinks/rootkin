@@ -200,7 +200,15 @@ pub(crate) fn import_photo(
     };
     match resolve(path) {
         Some(bytes) => {
-            if pkg.add_photo(person, bytes, ext, &name).is_err() {
+            // a file referenced again (by several people, say) is stored once and shared
+            let attached = match pkg.photo_with_bytes(&bytes) {
+                Some(media) => pkg.share_photo(person, &media).and_then(|()| {
+                    familyx::edit::set_primary_photo(&mut pkg.doc, person, &media)
+                        .map_err(|e| familyx::Error::Format(e.to_string()))
+                }),
+                None => pkg.add_photo(person, bytes, ext, &name).map(|_| ()),
+            };
+            if attached.is_err() {
                 dropped.add("photo that could not be attached");
             }
         }

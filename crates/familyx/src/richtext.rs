@@ -73,8 +73,10 @@ fn rtf_to_plain(rtf: &str) -> String {
                 let Some(&next) = bytes.get(i) else { break };
                 if next == b'\'' {
                     // \'hh: a byte in the ANSI code page (cp1252 ≈ Latin-1)
-                    let hex = rtf.get(i + 1..i + 3).unwrap_or("");
-                    i += 3;
+                    // up to two hex digits (ASCII, so `i` stays on a character boundary)
+                    let digits = bytes[i + 1..].iter().take(2).take_while(|b| b.is_ascii_hexdigit()).count();
+                    let hex = &rtf[i + 1..i + 1 + digits];
+                    i += 1 + digits;
                     if pending_skip > 0 {
                         pending_skip -= 1;
                     } else if skip_from.is_none() {
@@ -89,7 +91,8 @@ fn rtf_to_plain(rtf: &str) -> String {
                     if skip_from.is_none() && matches!(next, b'\\' | b'{' | b'}') {
                         out.push(next as char);
                     }
-                    i += 1;
+                    // a non-ASCII symbol is skipped whole
+                    i += rtf[i..].chars().next().map_or(1, char::len_utf8);
                     continue;
                 }
                 let start = i;
@@ -157,6 +160,19 @@ mod tests {
     fn rtf() {
         let rtf = r"{\rtf1\ansi\ansicpg1252\uc1\deff2{\fonttbl{\f0\fcharset0 Times New Roman;}}{\colortbl\red0\green0\blue0;}{\*\generator x;}\pard\f2 Born in P\'e4rnu\par Second \u8364?\par}";
         assert_eq!(to_plain("text/richtext", rtf), "Born in Pärnu\nSecond €");
+    }
+
+    #[test]
+    fn rtf_with_non_ascii_after_an_escape_does_not_panic() {
+        assert_eq!(to_plain("text/richtext", "{\\rtf1 x\\'aé}"), "x\né");
+        assert_eq!(to_plain("text/richtext", "{\\rtf1 \\é x}"), "x");
+        assert_eq!(to_plain("text/richtext", "{\\rtf1 \\'é}"), "é");
+        assert_eq!(to_plain("text/richtext", "{\\rtf1 \\'"), "");
+        // every cut of a mixed text is handled
+        let text = "{\\rtf1 P\\'e4rnu \\u8364? Šö\\'\\é}";
+        for end in (0..=text.len()).filter(|&n| text.is_char_boundary(n)) {
+            let _ = to_plain("text/richtext", &text[..end]);
+        }
     }
 
     #[test]

@@ -242,21 +242,42 @@ impl Document {
         t.links.as_ref().map(f)
     }
 
+    /// A position from the link table, checked against the element there; on a stale hit the
+    /// table is rebuilt once and asked again.
+    fn verified_link(&self, find: impl Fn(&Links) -> Option<usize>, ok: impl Fn(&Element) -> bool) -> Option<usize> {
+        let rel = self.root.child("RelationshipCollection")?;
+        for _ in 0..2 {
+            let pos = self.links_with(&find).flatten()?;
+            if element_at(rel, pos).is_some_and(&ok) {
+                return Some(pos);
+            }
+            self.tables().links = None;
+        }
+        None
+    }
+
     /// Position in `RelationshipCollection` of the link with this id.
     pub(crate) fn link_pos(&self, id: &str) -> Option<usize> {
-        self.links_with(|l| l.by_id.get(id).copied()).flatten()
+        self.verified_link(|l| l.by_id.get(id).copied(), |e| e.attr("Id").as_deref() == Some(id))
     }
 
     /// Position of the first link of `kind` from `a` to `b` (or, unless `ordered`, from `b` to `a`).
     pub(crate) fn link_between(&self, kind: LinkKind, a: &str, b: &str, ordered: bool) -> Option<usize> {
-        self.links_with(|l| {
-            let find = |x: &str, y: &str| l.pairs.get(&(kind, x.to_string(), y.to_string())).copied();
-            match (find(a, b), if ordered { None } else { find(b, a) }) {
-                (Some(p), Some(q)) => Some(p.min(q)),
-                (p, q) => p.or(q),
-            }
-        })
-        .flatten()
+        let is = |e: &Element, x: &str, y: &str| {
+            e.attr("xsi:type").and_then(|t| LinkKind::from_type(&t)) == Some(kind)
+                && e.attr("Person1Id").as_deref() == Some(x)
+                && e.attr("Person2Id").as_deref() == Some(y)
+        };
+        self.verified_link(
+            |l| {
+                let find = |x: &str, y: &str| l.pairs.get(&(kind, x.to_string(), y.to_string())).copied();
+                match (find(a, b), if ordered { None } else { find(b, a) }) {
+                    (Some(p), Some(q)) => Some(p.min(q)),
+                    (p, q) => p.or(q),
+                }
+            },
+            |e| is(e, a, b) || (!ordered && is(e, b, a)),
+        )
     }
 
     pub(crate) fn parents_of(&self, child: &str) -> Vec<String> {
