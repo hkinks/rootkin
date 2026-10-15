@@ -343,8 +343,11 @@ fn write_family(
     change: i64,
 ) {
     out.push_str(&format!("    <family handle=\"_f{number}\" id=\"F{number:04}\" change=\"{change}\">\n"));
-    let married = fam.link.is_some_and(|l| l.facts.iter().any(|f| f.tag == "MARR"));
-    out.push_str(&format!("      <rel type=\"{}\"/>\n", if married { "Married" } else { "Unknown" }));
+    let rel = fam
+        .link
+        .and_then(|l| l.facts.iter().find(|f| familyx::edit::is_marriage_tag(&f.tag)))
+        .map_or("Unknown", |f| vocab::gramps_relationship(&f.tag));
+    out.push_str(&format!("      <rel type=\"{rel}\"/>\n"));
     for (tag, id) in [("father", fam.husb), ("mother", fam.wife)] {
         if let Some(h) = id.and_then(person_handle) {
             out.push_str(&format!("      <{tag} hlink=\"{h}\"/>\n"));
@@ -660,7 +663,11 @@ impl Importer<'_> {
     /// its name (people keep it as a named event; couples fold it into the details).
     fn fact_for(&self, event_handle: &str) -> Option<(String, FactInput, Option<String>)> {
         let ev = self.events.get(&key(event_handle))?;
-        let known = GRAMPS_TYPES.iter().find(|(_, ty)| ty.eq_ignore_ascii_case(ev.ty.trim())).map(|(t, _)| *t);
+        let known = GRAMPS_TYPES
+            .iter()
+            .find(|(_, ty)| ty.eq_ignore_ascii_case(ev.ty.trim()))
+            .map(|(t, _)| *t)
+            .or_else(|| vocab::relationship_tag(&ev.ty));
         let generic = matches!(ev.ty.trim(), "" | "Event" | "Custom" | "Unknown");
         let (tag, details, custom) = match known {
             Some(tag) => (tag, ev.description.clone(), None),
@@ -780,10 +787,12 @@ impl Importer<'_> {
             _ => None,
         };
 
+        let mut has_marriage = false;
         for c in f.elements() {
             match c.name.as_str() {
                 "eventref" => {
                     let Some((tag, mut input, custom)) = self.fact_for(&handle(c)) else { continue };
+                    has_marriage |= edit::is_marriage_tag(&tag);
                     if let Some(name) = custom {
                         input.details =
                             [name, input.details].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
@@ -801,6 +810,16 @@ impl Importer<'_> {
                 }
                 "rel" | "father" | "mother" | "childref" => {}
                 other => self.dropped.add(format!("family.{other}")),
+            }
+        }
+
+        // the family's relationship type (Married, Civil Union, Unmarried) without an event for it
+        if let (Some(link), false) = (&link, has_marriage) {
+            let rel = f.child("rel").and_then(|r| r.attr("type")).unwrap_or_default();
+            if let Some(tag) = vocab::relationship_from_gramps(&rel) {
+                if let Err(e) = edit::add_couple_fact(&mut self.pkg.doc, link, tag, &FactInput::default()) {
+                    self.warnings.push(format!("family: {tag}: {e}"));
+                }
             }
         }
 

@@ -312,6 +312,10 @@ fn write_fact(w: &mut Writer, fact: &Fact, in_family: bool, src: &HashMap<&str, 
         w.line(1, tag, &fact.details);
     } else if is_event {
         w.raw(1, tag, "");
+    } else if in_family && vocab::is_marriage_like(tag) {
+        // a relationship type of the app: still the marriage, with its kind as TYPE
+        w.raw(1, "MARR", "");
+        w.line(2, "TYPE", fact.label());
     } else {
         // tags GEDCOM does not know travel as a typed generic event
         w.raw(1, "EVEN", "");
@@ -915,7 +919,12 @@ impl Importer<'_> {
         for c in &n.children {
             let tag = c.tag.as_str();
             if FAM_EVENTS.contains(&tag) {
-                let input = self.fact_input(&format!("FAM.{tag}"), c, false, false);
+                // `MARR` / `EVEN` typed with one of the app's relationship names
+                let relationship = matches!(tag, "MARR" | "EVEN")
+                    .then(|| c.child_value("TYPE").and_then(vocab::relationship_tag))
+                    .flatten();
+                let tag = relationship.unwrap_or(tag);
+                let input = self.fact_input(&format!("FAM.{tag}"), c, false, relationship.is_some());
                 match &link {
                     Some(link) => match edit::add_couple_fact(&mut self.pkg.doc, link, tag, &input) {
                         Ok(fact) => {

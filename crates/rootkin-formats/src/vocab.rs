@@ -20,6 +20,52 @@ pub fn guess_living(dead: bool, birth_year: Option<i32>) -> bool {
     !dead && birth_year.is_some_and(|y| y > chrono::Utc::now().year() - 110)
 }
 
+/// The app's relationship types of a couple: the tag of the couple's marriage event.
+const RELATIONSHIP_TAGS: [&str; 11] = [
+    "MARR_Civil",
+    "MARR_Religious",
+    "MARR_CommonLaw",
+    "MARR_OtherMarriage",
+    "MARR_Partnership",
+    "MARR_RegisteredPartnership",
+    "MARR_LivingTogether",
+    "MARR_LivingTogetherApart",
+    "MARR_NotMarried",
+    "MARR_Other",
+    "MARR_Unknown",
+];
+
+/// The relationship tag whose readable name (`Civil marriage`) is `label`.
+pub fn relationship_tag(label: &str) -> Option<&'static str> {
+    let label = label.trim();
+    RELATIONSHIP_TAGS.iter().find(|t| familyx::model::fact_label(t).eq_ignore_ascii_case(label)).copied()
+}
+
+/// Relationship types that are marriages (written as `MARR` in GEDCOM).
+pub fn is_marriage_like(tag: &str) -> bool {
+    matches!(tag, "MARR" | "MARR_Civil" | "MARR_Religious" | "MARR_CommonLaw" | "MARR_OtherMarriage")
+}
+
+/// Gramps' family relationship type for a couple's marriage-event tag.
+pub fn gramps_relationship(tag: &str) -> &'static str {
+    match tag {
+        "MARR" | "MARR_Religious" | "MARR_CommonLaw" | "MARR_OtherMarriage" => "Married",
+        "MARR_Civil" | "MARR_Partnership" | "MARR_RegisteredPartnership" => "Civil Union",
+        "MARR_LivingTogether" | "MARR_LivingTogetherApart" | "MARR_NotMarried" => "Unmarried",
+        _ => "Unknown",
+    }
+}
+
+/// The marriage-event tag that stands for a Gramps family relationship type.
+pub fn relationship_from_gramps(rel: &str) -> Option<&'static str> {
+    match rel.trim().to_ascii_lowercase().as_str() {
+        "married" => Some("MARR"),
+        "civil union" => Some("MARR_RegisteredPartnership"),
+        "unmarried" => Some("MARR_NotMarried"),
+        _ => None,
+    }
+}
+
 /// Individual events (GEDCOM 5.5.1).
 pub const INDI_EVENTS: &[&str] = &[
     "BIRT", "CHR", "DEAT", "BURI", "CREM", "ADOP", "BAPM", "BARM", "BASM", "BLES", "CHRA", "CONF", "FCOM", "ORDN",

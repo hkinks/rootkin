@@ -148,3 +148,55 @@ fn person_notes_survive_gramps_both_ways() {
     let again = tree_of(out.as_bytes(), Format::Gramps);
     assert_eq!(again.people[0].notes[0].plain_text(), note.replace('|', "\n"));
 }
+
+const TWO_COUPLES: &str = concat!(
+    "0 HEAD\n",
+    "0 @I1@ INDI\n1 NAME Ann /Test/\n1 SEX F\n1 FAMS @F1@\n",
+    "0 @I2@ INDI\n1 NAME Bob /Test/\n1 SEX M\n1 FAMS @F1@\n",
+    "0 @I3@ INDI\n1 NAME Cy /Test/\n1 SEX M\n1 FAMS @F2@\n",
+    "0 @I4@ INDI\n1 NAME Di /Test/\n1 SEX F\n1 FAMS @F2@\n",
+    "0 @F1@ FAM\n1 HUSB @I2@\n1 WIFE @I1@\n1 MARR\n2 TYPE Civil marriage\n2 DATE 1950\n",
+    "0 @F2@ FAM\n1 HUSB @I3@\n1 WIFE @I4@\n1 EVEN\n2 TYPE Living together\n",
+    "0 TRLR\n"
+);
+
+fn couple_tags(tree: &Tree) -> Vec<String> {
+    tree.spouse_links.iter().flat_map(|l| l.facts.iter().map(|f| f.tag.clone())).collect()
+}
+
+#[test]
+fn relationship_types_of_couples_survive_gedcom() {
+    let (pkg, _) = import(TWO_COUPLES.as_bytes(), Format::Gedcom).unwrap();
+    assert_eq!(couple_tags(&Tree::from_doc(&pkg.doc)), ["MARR_Civil", "MARR_LivingTogether"]);
+    for format in [Format::Gedcom, Format::Gedcom7] {
+        let out = export(&pkg, format).unwrap();
+        let text = String::from_utf8(out.clone()).unwrap();
+        // the civil marriage is still a MARR for other programs
+        assert!(text.contains("1 MARR\n2 TYPE Civil marriage\n2 DATE 1950"), "{text}");
+        assert_eq!(couple_tags(&tree_of(&out, Format::Gedcom)), ["MARR_Civil", "MARR_LivingTogether"]);
+    }
+}
+
+#[test]
+fn relationship_types_map_onto_gramps_family_types() {
+    let (pkg, _) = import(TWO_COUPLES.as_bytes(), Format::Gedcom).unwrap();
+    let xml = gramps_text(&pkg);
+    assert!(xml.contains(r#"<rel type="Civil Union"/>"#) && xml.contains(r#"<rel type="Unmarried"/>"#), "{xml}");
+    assert_eq!(couple_tags(&tree_of(xml.as_bytes(), Format::Gramps)), ["MARR_Civil", "MARR_LivingTogether"]);
+}
+
+#[test]
+fn a_married_gramps_family_without_a_marriage_event_stays_married() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<database xmlns="http://gramps-project.org/xml/1.7.1/">
+  <people>
+    <person handle="_a" id="I1"><gender>M</gender><name><first>Al</first><surname>Test</surname></name><parentin hlink="_f"/></person>
+    <person handle="_b" id="I2"><gender>F</gender><name><first>Bea</first><surname>Test</surname></name><parentin hlink="_f"/></person>
+  </people>
+  <families><family handle="_f" id="F1"><rel type="Married"/><father hlink="_a"/><mother hlink="_b"/></family></families>
+</database>"#;
+    let tree = tree_of(xml.as_bytes(), Format::Gramps);
+    assert_eq!(couple_tags(&tree), ["MARR"]);
+    let (pkg, _) = import(xml.as_bytes(), Format::Gramps).unwrap();
+    assert!(gramps_text(&pkg).contains(r#"<rel type="Married"/>"#));
+}
