@@ -64,7 +64,7 @@ fn imports_handwritten_gramps_xml() {
     );
     let custom = peeter.fact("EVEN").unwrap();
     assert_eq!((custom.date.descriptor.as_str(), custom.date.text.as_str()), ("TextOnly", "around the war"));
-    assert_eq!(custom.details, "Pilgrimage");
+    assert_eq!((custom.custom_tag.as_str(), custom.details.as_str()), ("Pilgrimage", ""));
 
     let kai = &tree.people[2];
     assert_eq!(tree.parents(&kai.id).len(), 3);

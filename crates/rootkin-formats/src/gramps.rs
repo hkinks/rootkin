@@ -33,7 +33,8 @@ fn attr(s: &str) -> String {
 fn gramps_type(fact: &Fact) -> String {
     match GRAMPS_TYPES.iter().find(|(t, _)| *t == fact.tag) {
         Some((_, ty)) => (*ty).to_string(),
-        None if fact.tag == "EVEN" => "Event".to_string(),
+        // a user-named event keeps its name as the Gramps custom type
+        None if fact.tag == "EVEN" && fact.custom_tag.is_empty() => "Event".to_string(),
         None => fact.label().to_string(),
     }
 }
@@ -644,19 +645,18 @@ impl Importer<'_> {
         self.events.get(&key(event_handle)).map(|e| e.citations.clone()).unwrap_or_default()
     }
 
-    fn fact_for(&self, event_handle: &str) -> Option<(String, FactInput)> {
+    /// The fact tag, its content and, for an event type Gramps users made up,
+    /// its name (people keep it as a named event; couples fold it into the details).
+    fn fact_for(&self, event_handle: &str) -> Option<(String, FactInput, Option<String>)> {
         let ev = self.events.get(&key(event_handle))?;
         let known = GRAMPS_TYPES.iter().find(|(_, ty)| ty.eq_ignore_ascii_case(ev.ty.trim())).map(|(t, _)| *t);
-        let (tag, details) = match known {
-            Some(tag) => (tag, ev.description.clone()),
-            None => {
-                let generic = matches!(ev.ty.trim(), "" | "Event" | "Custom" | "Unknown");
-                let parts = [(!generic).then(|| ev.ty.clone()), Some(ev.description.clone())];
-                ("EVEN", parts.into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; "))
-            }
+        let generic = matches!(ev.ty.trim(), "" | "Event" | "Custom" | "Unknown");
+        let (tag, details, custom) = match known {
+            Some(tag) => (tag, ev.description.clone(), None),
+            None => ("EVEN", ev.description.clone(), (!generic).then(|| ev.ty.trim().to_string())),
         };
         let place = ev.place.as_deref().map(|h| self.place_title(h)).unwrap_or_default();
-        Some((tag.to_string(), FactInput { date: dates::to_model(&ev.date), place, details }))
+        Some((tag.to_string(), FactInput { date: dates::to_model(&ev.date), place, details }, custom))
     }
 
     fn person(&mut self, p: &Element) -> Result<()> {
@@ -689,7 +689,7 @@ impl Importer<'_> {
                         self.dropped.add(format!("person.eventref with role {role}"));
                         continue;
                     }
-                    let Some((tag, input)) = self.fact_for(&handle(c)) else {
+                    let Some((tag, input, custom)) = self.fact_for(&handle(c)) else {
                         self.warnings.push(format!("person {}: eventref to unknown event", id));
                         continue;
                     };
@@ -697,7 +697,10 @@ impl Importer<'_> {
                         birth_year = birth_year.or(input.date.year);
                     }
                     dead |= matches!(tag.as_str(), "DEAT" | "BURI" | "CREM");
-                    let fact = edit::add_fact(&mut self.pkg.doc, &id, &tag, &input)?;
+                    let fact = match custom {
+                        Some(name) => edit::add_custom_fact(&mut self.pkg.doc, &id, &name, &input)?,
+                        None => edit::add_fact(&mut self.pkg.doc, &id, &tag, &input)?,
+                    };
                     let cites = self.event_citations(&handle(c));
                     self.cite(&fact, &cites);
                 }
@@ -754,7 +757,11 @@ impl Importer<'_> {
         for c in f.elements() {
             match c.name.as_str() {
                 "eventref" => {
-                    let Some((tag, input)) = self.fact_for(&handle(c)) else { continue };
+                    let Some((tag, mut input, custom)) = self.fact_for(&handle(c)) else { continue };
+                    if let Some(name) = custom {
+                        input.details =
+                            [name, input.details].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
+                    }
                     match &link {
                         Some(link) => match edit::add_couple_fact(&mut self.pkg.doc, link, &tag, &input) {
                             Ok(fact) => {
