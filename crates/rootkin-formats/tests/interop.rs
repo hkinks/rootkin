@@ -218,3 +218,12 @@ fn addresses_and_interpreted_date_words_are_kept() {
     assert_eq!(birth.details, "Date as written: about spring");
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
+
+#[test]
+fn gramps_header_has_the_researcher_element_the_schema_requires() {
+    let (pkg, _) = import(b"0 HEAD\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n", Format::Gedcom).unwrap();
+    let xml = gramps_text(&pkg);
+    assert!(xml.contains("<researcher/>"), "{xml}");
+    // and the file still reads back
+    assert_eq!(tree_of(xml.as_bytes(), Format::Gramps).people.len(), 1);
+}

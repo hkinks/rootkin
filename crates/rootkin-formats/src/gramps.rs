@@ -132,7 +132,7 @@ pub(crate) fn export(pkg: &Package, media: &crate::ExportMedia) -> Result<Vec<u8
     out.push_str("\"http://gramps-project.org/xml/1.7.1/grampsxml.dtd\">\n");
     out.push_str(&format!("<database xmlns=\"{NS}\">\n"));
     out.push_str(&format!(
-        "  <header>\n    <created date=\"{}\" version=\"5.1.0\"/>\n  </header>\n",
+        "  <header>\n    <created date=\"{}\" version=\"5.1.0\"/>\n    <researcher/>\n  </header>\n",
         chrono::Utc::now().format("%Y-%m-%d")
     ));
 
