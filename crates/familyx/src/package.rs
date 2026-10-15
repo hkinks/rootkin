@@ -93,23 +93,54 @@ impl Package {
         Ok(media_id)
     }
 
-    /// Detach a photo from a person and, if nothing else uses it, delete the
-    /// file from the package.
+    /// Detach a photo from a person and, if nothing else uses it, remove its `PackagedFile`
+    /// record. The file itself stays in the package so that undoing (restoring the document)
+    /// brings the photo back; saving leaves out files nothing refers to any more (see
+    /// [`Package::unreferenced_media`]).
     pub fn remove_photo(&mut self, person_id: &str, media_id: &str) -> Result<()> {
         let unused =
             edit::detach_photo(&mut self.doc, person_id, media_id).map_err(|e| Error::Format(e.to_string()))?;
         if unused {
-            if let Some(part) = edit::remove_packaged_file(&mut self.doc, media_id) {
-                self.parts.retain(|(n, _)| *n != part);
-                if let Some((_, data)) = self.parts.iter_mut().find(|(n, _)| n == RELS_PART) {
-                    let mut rels = Document::parse(data)?;
-                    let target = format!("/{part}");
-                    rels.root.remove_children_where(|r| r.attr("Target").as_deref() == Some(target.as_str()));
-                    *data = rels.to_bytes();
-                }
-            }
+            edit::remove_packaged_file(&mut self.doc, media_id);
         }
         Ok(())
+    }
+
+    /// Media parts (under `Multimedia/`) whose file name no text or attribute anywhere in the
+    /// tree mentions: left behind by a removed photo, or by undoing "Add photo" or "Import into
+    /// this tree". Saving leaves them out. Any mention of the file name keeps a part (a
+    /// `PackagedFile` path of a photo, attachment, story or family crest, or something this
+    /// version doesn't know), and parts outside `Multimedia/` are always kept.
+    pub fn unreferenced_media(&self) -> std::collections::HashSet<String> {
+        use std::collections::{HashMap, HashSet};
+        let file_name = |s: &str| s.rsplit(['/', '\\']).next().unwrap_or(s).trim().to_lowercase();
+        let mut candidates: HashMap<String, Vec<&str>> = HashMap::new();
+        for (name, _) in &self.parts {
+            if name.len() > 11 && name[..11].eq_ignore_ascii_case("Multimedia/") {
+                candidates.entry(file_name(name)).or_default().push(name);
+            }
+        }
+        if candidates.is_empty() {
+            return HashSet::new();
+        }
+        let mut stack = vec![&self.doc.root];
+        while let Some(el) = stack.pop() {
+            for node in &el.children {
+                match node {
+                    crate::doc::Node::Element(child) => stack.push(child),
+                    crate::doc::Node::Text(t) | crate::doc::Node::Raw(t) => {
+                        candidates.remove(&file_name(&crate::doc::unescape(t)));
+                    }
+                }
+            }
+            for (_, value) in &el.attrs {
+                candidates.remove(&file_name(&crate::doc::unescape(value)));
+            }
+            if candidates.is_empty() {
+                break;
+            }
+        }
+        candidates.into_values().flatten().map(str::to_string).collect()
     }
 
     /// Add everyone and everything of `other` to this tree ("import into this tree"): people,
@@ -117,7 +148,7 @@ impl Package {
     /// files, all with new ids. Nothing already here changes, and the home person stays.
     ///
     /// Undo by restoring `self.doc`; photo files copied here then remain in the package
-    /// unreferenced, as with a removed photo.
+    /// unreferenced until the next save leaves them out (see [`Package::unreferenced_media`]).
     pub fn append(&mut self, other: &Package) -> Result<crate::AppendReport> {
         let (report, parts) = crate::append::append_document(&mut self.doc, &other.doc);
         for part in parts {
@@ -298,9 +329,26 @@ impl Package {
         let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let family_blob = codec::encode_part(&self.doc.to_bytes(), format);
         let mut family = Some(family_blob);
+        let unused = self.unreferenced_media();
         for (i, (name, data)) in self.parts.iter().enumerate() {
             if i == self.family_index {
                 write_entry(&mut zip, format.part_name(), family.take().as_deref().unwrap(), options)?;
+            }
+            if unused.contains(name) {
+                continue;
+            }
+            if !unused.is_empty() && (name == RELS_PART || name == "[Content_Types].xml") {
+                // no relationship or content type for a part that isn't written
+                let mut doc = Document::parse(data)?;
+                let targets: Vec<String> = unused.iter().map(|n| format!("/{n}")).collect();
+                let before = doc.root.children.len();
+                doc.root.remove_children_where(|e| {
+                    ["Target", "PartName"].iter().any(|a| e.attr(a).is_some_and(|v| targets.iter().any(|t| *t == v)))
+                });
+                if doc.root.children.len() != before {
+                    write_entry(&mut zip, name, &doc.to_bytes(), options)?;
+                    continue;
+                }
             }
             write_entry(&mut zip, name, data, options)?;
         }

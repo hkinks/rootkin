@@ -308,6 +308,16 @@ files; 14.2 is implemented (story database), 14.1 and 14.3 are not yet.
 - Child has `FamilyChildLink` → parents' `SpouseLink` when both parents are a couple.
 - Media: `PackagedFile` (`RelativePath` `Multimedia\x.png`), person `PrimaryImageId`.
 
+### Media files
+
+Edits never delete a package part, so undo (which restores the document) always finds the file again. "Remove
+photo" detaches the photo and removes its `PackagedFile` record when nothing outside `PackagedFileCollection`
+names the media id any more (person and couple `Multimedia`, fact and source media, `FamilyCrestId`, stories,
+unknown elements). Saving (`Package::unreferenced_media`) leaves out parts under `Multimedia/` whose file name no
+text or attribute anywhere in the tree mentions, with their relationship and content-type entries; any mention
+keeps the part, and parts elsewhere (`stories7`, unknown parts) are always kept. This also cleans up after undoing
+"Add photo" or "Import into this tree".
+
 ## Sources, repositories, citations (derived from the app's classes, not from real files)
 
 No sample file with sources was available. The schema below was read from the vendor's
@@ -354,7 +364,7 @@ content. A source (same title, short title, author, publisher, call number and n
 already exists is reused and not copied. Photo parts get new `Multimedia/<guid>.<ext>` names, `RelativePath` is rewritten
 and the part and its package relationship are added. The target's own records, home person and author are untouched;
 `AuthorCollection`, `TaskCollection` and `FamilyProperties` of the other file are not carried. Undo restores the
-document only, so photo files stay unreferenced in the package (as after removing a photo).
+document only; the photo files stay in the package until the next save leaves them out (see "Media files" below).
 
 **Duplicates** (`duplicates::find_duplicates`): names are folded (case, diacritics, punctuation) and compared as sorted
 word sets, alternate names included. Candidates need birth years at most 2 apart, or one missing (then the name needs two

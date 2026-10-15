@@ -912,7 +912,7 @@ pub fn set_primary_photo(doc: &mut Document, person_id: &str, media_id: &str) ->
 }
 
 /// Detach a photo from a person. Returns true if no person or fact refers to
-/// it anymore (the caller may then drop the file, see `Package::remove_photo`).
+/// it anymore (the caller may then drop the record, see `Package::remove_photo`).
 pub fn detach_photo(doc: &mut Document, person_id: &str, media_id: &str) -> EditResult<bool> {
     let person = person_mut(doc, person_id)?;
     if let Some(list) = person.child_mut("Multimedia") {
@@ -929,13 +929,12 @@ pub fn detach_photo(doc: &mut Document, person_id: &str, media_id: &str) -> Edit
         }
     }
     touch(person);
+    // anything outside the file records naming the id keeps it (person and couple photos,
+    // fact and source media, the family crest, stories, elements this version doesn't know)
     fn refers(el: &Element, id: &str) -> bool {
-        ((el.name == "string" || el.name == "PrimaryImageId") && el.text() == id)
-            || el.elements().any(|c| refers(c, id))
+        el.text() == id || el.attrs.iter().any(|(_, v)| v == id) || el.elements().any(|c| refers(c, id))
     }
-    let used = ["PeopleCollection", "RelationshipCollection", "SourceCollection"]
-        .iter()
-        .any(|c| doc.root.child(c).is_some_and(|c| refers(c, media_id)));
+    let used = doc.root.elements().filter(|c| c.name != "PackagedFileCollection").any(|c| refers(c, media_id));
     Ok(!used)
 }
 

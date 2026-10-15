@@ -527,7 +527,7 @@ impl App {
             return None;
         }
         let pkg = self.pkg.as_mut()?;
-        // photo parts aren't snapshotted; undo restores references only
+        // photo files stay in the package; saving leaves out the ones no record refers to
         let snapshot = pkg.doc.clone();
         match edit(pkg) {
             Ok(value) => {
