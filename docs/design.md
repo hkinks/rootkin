@@ -397,7 +397,7 @@ length (`edit::is_ancestor`); the tree layout also skips anyone already on the p
 ## Architecture
 
 - `crates/familyx`: `codec` (crypto, all tree variants), `protection` (`FamilyId`), `doc` (lossless XML tree, byte-exact round-trip),
-  `package` (OPC zip, atomic save + `.bak`), `model` (read-only `Tree` snapshot rebuilt
+  `package` (OPC zip, atomic save + `.bak`: a uniquely named temp file, synced to disk with its folder before it replaces the file), `model` (read-only `Tree` snapshot rebuilt
   after each edit), edits mutate the `doc` directly so unknown data survives.
 - `crates/rootkin-cli`: `dump`, `pack`, `roundtrip`, `summary`, `check`, `example`, `import`, `export`.
 - `crates/rootkin-formats`: GEDCOM and Gramps XML import/export (see below).

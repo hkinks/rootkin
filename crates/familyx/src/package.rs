@@ -417,10 +417,38 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     if path.exists() {
         std::fs::copy(path, backup_path(path))?;
     }
-    let tmp = path.with_extension("familyx.tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    // a name of its own, so two saves never share a temporary file
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{}.tmp", edit::new_id()));
+    let tmp = path.with_file_name(name);
+    let written: Result<()> = (|| {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        // on disk before it replaces the old file, so a crash leaves one or the other
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)?;
+        sync_dir(path);
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// Make the rename durable where the platform allows syncing a directory.
+fn sync_dir(path: &Path) {
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 fn write_entry(
