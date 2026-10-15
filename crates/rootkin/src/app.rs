@@ -180,8 +180,22 @@ impl App {
         self.busy.is_some()
     }
 
+    /// Unsaved changes, counting a date in the form that can't be understood (and so isn't in the tree).
     pub(crate) fn dirty(&self) -> bool {
-        self.pkg.is_some() && self.version != self.saved_version
+        self.pkg.is_some() && (self.version != self.saved_version || self.invalid_date_in_form())
+    }
+
+    fn invalid_date_in_form(&self) -> bool {
+        self.form.as_ref().is_some_and(|f| f.has_invalid_date(&self.tree))
+    }
+
+    /// True (with a message) when the form holds a date that can't be understood.
+    fn refuse_invalid_date(&mut self) -> bool {
+        if !self.invalid_date_in_form() {
+            return false;
+        }
+        self.toasts.error("A date in the form can't be understood. Correct it or clear it first.");
+        true
     }
 
     // ------------------------------------------------------------ files
@@ -217,7 +231,7 @@ impl App {
 
     /// Save in the background; returns the job id (`None` if another job is running).
     pub(crate) fn start_save(&mut self, path: PathBuf) -> Option<u64> {
-        if self.busy.is_some() {
+        if self.busy.is_some() || self.refuse_invalid_date() {
             return None;
         }
         self.flush_form();
@@ -406,7 +420,8 @@ impl App {
     }
 
     fn pick_save_as(&mut self) -> Option<u64> {
-        if self.busy.is_some() {
+        if self.busy.is_some() || self.refuse_invalid_date() {
+            self.pending = None;
             return None;
         }
         self.flush_form();
@@ -463,7 +478,12 @@ impl App {
         let (x0, y0) = ((r.min.x * scale) as u32, (r.min.y * scale) as u32);
         let (w, h) = ((r.width() * scale) as u32, (r.height() * scale) as u32);
         let [iw, ih] = image.size;
-        let mut out = image::RgbaImage::new(w.min(iw as u32 - x0), h.min(ih as u32 - y0));
+        let (w, h) = (w.min((iw as u32).saturating_sub(x0)), h.min((ih as u32).saturating_sub(y0)));
+        if w == 0 || h == 0 {
+            self.toasts.error("Export failed: the tree is not visible in the window");
+            return;
+        }
+        let mut out = image::RgbaImage::new(w, h);
         for (x, y, px) in out.enumerate_pixels_mut() {
             let c = image.pixels[(y0 + y) as usize * iw + (x0 + x) as usize];
             *px = image::Rgba([c.r(), c.g(), c.b(), 255]);
@@ -532,7 +552,6 @@ impl App {
         match edit(pkg) {
             Ok(value) => {
                 self.push_undo(label, snapshot);
-                self.photos.clear();
                 self.after_change();
                 Some(value)
             }
@@ -605,7 +624,7 @@ impl App {
 
     /// Select a person and centre the tree on them, keeping history.
     pub(crate) fn select(&mut self, id: &str) {
-        if self.selected.as_deref() == Some(id) {
+        if self.selected.as_deref() == Some(id) || self.refuse_invalid_date() {
             return;
         }
         self.flush_form();
@@ -617,6 +636,9 @@ impl App {
     }
 
     fn go_back(&mut self, forward: bool) {
+        if self.refuse_invalid_date() {
+            return;
+        }
         self.flush_form();
         let (from, to) =
             if forward { (&mut self.future, &mut self.history) } else { (&mut self.history, &mut self.future) };
@@ -775,10 +797,10 @@ impl App {
                             self.export_format("gramps", Format::Gramps);
                         }
                         ui.separator();
-                        if ui.button("Tree as image (SVG)…").clicked() {
+                        if ui.button("Tree as SVG image…").clicked() {
                             self.export_svg();
                         }
-                        if ui.button("Tree as picture (PNG)…").clicked() {
+                        if ui.button("Tree as PNG image…").clicked() {
                             self.export_png(&ctx);
                         }
                     });
@@ -840,7 +862,13 @@ impl App {
                     .on_hover_text("Hide it on a small screen to give the tree more room");
                 ui.separator();
                 egui::widgets::global_theme_preference_buttons(ui);
-                ui.label("Text size: Ctrl + / Ctrl −");
+                // text size, also with Ctrl + and Ctrl - (shortcut shown on the buttons)
+                if ui.add(egui::Button::new("Larger text").shortcut_text("Ctrl +")).clicked() {
+                    egui::gui_zoom::zoom_in(ui.ctx());
+                }
+                if ui.add(egui::Button::new("Smaller text").shortcut_text("Ctrl -")).clicked() {
+                    egui::gui_zoom::zoom_out(ui.ctx());
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("About Rootkin").clicked() {
@@ -996,6 +1024,8 @@ impl App {
                 Some(1) => {
                     self.confirm_close = false;
                     self.saved_version = self.version;
+                    // a date that can't be understood is dropped with the rest
+                    self.form = None;
                     self.run_pending();
                 }
                 Some(_) => {

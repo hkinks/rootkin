@@ -133,14 +133,14 @@ fn find(tree: &Tree, wanted: impl Fn(&str, &str) -> bool) -> Vec<DuplicateCandid
                     continue;
                 }
                 let birth = match (year(a, "BIRT"), year(b, "BIRT")) {
-                    (Some(x), Some(y)) if (x - y).abs() <= 2 => 40 - 10 * (x - y).unsigned_abs(),
+                    (Some(x), Some(y)) if x.abs_diff(y) <= 2 => 40 - 10 * x.abs_diff(y),
                     (Some(_), Some(_)) | (None, None) => continue,
                     // with one year unknown, a one-word name is too little to go on
                     _ if !two_words => continue,
                     _ => 10,
                 };
                 let death = match (year(a, "DEAT"), year(b, "DEAT")) {
-                    (Some(x), Some(y)) if (x - y).abs() > 2 => continue,
+                    (Some(x), Some(y)) if x.abs_diff(y) > 2 => continue,
                     (Some(x), Some(y)) if x == y => 5,
                     _ => 0,
                 };

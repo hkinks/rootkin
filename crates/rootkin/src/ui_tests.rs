@@ -571,6 +571,29 @@ fn the_date_field_explains_ambiguous_numeric_dates() {
     h.get_by_label("Understood as: 1950s");
 }
 
+#[test]
+fn a_date_that_cant_be_understood_is_not_silently_dropped() {
+    let mine = example_copy("bad-date");
+    let mut h = harness_at(&mine);
+    let erik = h.state().selected.clone().unwrap();
+    let shown = h.state().tree.person(&erik).unwrap().fact("BIRT").unwrap().date.display();
+    text_input(&h, &shown).focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    text_input(&h, &shown).type_text("31 Feb 1950");
+    h.run_steps(3);
+    // counts as unsaved, and neither saving nor moving on loses it
+    h.get_by_label_contains("Unsaved changes");
+    assert!(h.query_by_label_contains("All changes saved").is_none());
+    assert!(h.state_mut().start_save(mine.clone()).is_none(), "save is refused");
+    let other = h.state().tree.people[3].id.clone();
+    h.state_mut().select(&other);
+    assert_eq!(h.state().selected.as_deref(), Some(erik.as_str()), "stays with the date");
+    h.run_steps(2);
+    h.get_by_label_contains("can't be understood");
+    text_input(&h, "31 Feb 1950");
+}
+
 /// A tree with `n` people named after the letters of the alphabet.
 fn big_app(n: usize) -> Harness<'static, App> {
     let mut pkg = Package::new();
