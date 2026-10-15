@@ -88,3 +88,40 @@ fn name_title_suffix_and_nickname_survive_gedcom_and_gramps() {
     assert!(via_gramps.contains("<title>Dr.</title>"), "{via_gramps}");
     check(&tree_of(via_gramps.as_bytes(), Format::Gramps));
 }
+
+const FICTIONAL_V7_SOURCE: &str = concat!(
+    "0 HEAD\n0 @I1@ INDI\n1 NAME Ida /Test/\n",
+    "1 NAME Ida /Maiden/\n2 TYPE maiden\n",
+    "1 NAME Idy /Test/\n2 TYPE Adopted\n",
+    "1 NOTE write to ida@@example.test\n",
+    "1 BIRT\n2 DATE (some spring day)\n",
+    "0 TRLR\n"
+);
+
+#[test]
+fn gedcom7_export_uses_only_what_the_spec_allows() {
+    let (pkg, _) = import(FICTIONAL_V7_SOURCE.as_bytes(), Format::Gedcom).unwrap();
+    let text = String::from_utf8(export(&pkg, Format::Gedcom7).unwrap()).unwrap();
+    // name types are the upper-case enumeration, other words go in a PHRASE
+    assert!(text.contains("2 TYPE MAIDEN\n"), "{text}");
+    assert!(text.contains("2 TYPE OTHER\n3 PHRASE Adopted\n"), "{text}");
+    // free-text dates are an empty DATE with a PHRASE
+    assert!(text.contains("2 DATE\n3 PHRASE some spring day\n"), "{text}");
+    // only a leading @ is doubled in 7.0
+    assert!(text.contains("1 NOTE write to ida@example.test\n"), "{text}");
+    // 5.5.1 still doubles and keeps the parenthesised date and lower-case type
+    let old = String::from_utf8(export(&pkg, Format::Gedcom).unwrap()).unwrap();
+    assert!(old.contains("2 TYPE maiden\n") && old.contains("2 DATE (some spring day)\n"), "{old}");
+    assert!(old.contains("1 NOTE write to ida@@example.test\n"), "{old}");
+}
+
+#[test]
+fn gedcom7_name_types_and_date_phrases_come_back_in() {
+    let (pkg, _) = import(FICTIONAL_V7_SOURCE.as_bytes(), Format::Gedcom).unwrap();
+    let v7 = export(&pkg, Format::Gedcom7).unwrap();
+    let tree = tree_of(&v7, Format::Gedcom);
+    let p = &tree.people[0];
+    let types: Vec<&str> = p.names.iter().filter(|n| !n.is_primary).map(|n| n.name_type.as_str()).collect();
+    assert_eq!(types, ["Maiden", "Adopted"]);
+    assert_eq!(p.fact("BIRT").unwrap().date.text, "some spring day");
+}

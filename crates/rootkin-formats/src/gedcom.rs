@@ -43,7 +43,15 @@ impl Writer {
 
     /// A line whose value may be long or multi-line: split with CONT / CONC.
     fn line(&mut self, level: usize, tag: &str, value: &str) {
-        let escaped = value.replace('@', "@@").replace("\r\n", "\n");
+        // 5.5.1 doubles every @; 7.0 only one that starts the value
+        let value = value.replace("\r\n", "\n");
+        let escaped = if self.v7 {
+            let lines: Vec<String> =
+                value.split('\n').map(|l| if l.starts_with('@') { format!("@{l}") } else { l.to_string() }).collect();
+            lines.join("\n")
+        } else {
+            value.replace('@', "@@")
+        };
         for (i, segment) in escaped.split('\n').enumerate() {
             let (lvl, t) = if i == 0 { (level, tag) } else { (level + 1, "CONT") };
             if self.v7 {
@@ -258,11 +266,18 @@ fn write_name(w: &mut Writer, name: &familyx::model::Name, alternate: bool) {
     }
     w.line(1, "NAME", &line);
     if alternate && !name.name_type.is_empty() {
-        let ty = match name.name_type.as_str() {
-            t @ ("Aka" | "Birth" | "Immigrant" | "Maiden" | "Married") => t.to_lowercase(),
-            other => other.to_string(),
-        };
-        w.line(2, "TYPE", &ty);
+        match (w.v7, name.name_type.as_str()) {
+            // 7.0 has a fixed list of upper-case values; anything else is OTHER plus the words
+            (true, t @ ("Aka" | "Birth" | "Immigrant" | "Maiden" | "Married" | "Professional")) => {
+                w.raw(2, "TYPE", &t.to_ascii_uppercase());
+            }
+            (true, other) => {
+                w.raw(2, "TYPE", "OTHER");
+                w.line(3, "PHRASE", other);
+            }
+            (false, t @ ("Aka" | "Birth" | "Immigrant" | "Maiden" | "Married")) => w.line(2, "TYPE", &t.to_lowercase()),
+            (false, other) => w.line(2, "TYPE", other),
+        }
     }
     for (tag, value) in [
         ("GIVN", &name.given),
@@ -305,9 +320,13 @@ fn write_fact(w: &mut Writer, fact: &Fact, in_family: bool, src: &HashMap<&str, 
     if tag == "EVEN" && !fact.custom_tag.is_empty() {
         w.line(2, "TYPE", &fact.custom_tag);
     }
-    let date = dates::from_model(&fact.date).to_gedcom();
-    if !date.is_empty() {
-        w.line(2, "DATE", &date);
+    let date = dates::from_model(&fact.date);
+    if !date.text.is_empty() && w.v7 {
+        // 7.0 has no free-text dates: an empty DATE carries the words as its PHRASE
+        w.raw(2, "DATE", "");
+        w.line(3, "PHRASE", &date.text);
+    } else if !date.is_empty() {
+        w.line(2, "DATE", &date.to_gedcom());
     }
     if !fact.place.is_empty() {
         w.line(2, "PLAC", &fact.place);
@@ -749,7 +768,12 @@ impl Importer<'_> {
         let mut married_names: Vec<(String, String)> = married.map(|m| (given.clone(), m)).into_iter().collect();
         for alt in names.iter().skip(1) {
             let (g, s, m, extras) = self.name_parts(alt);
-            let ty = alt.child_value("TYPE").map(vocab::name_type).unwrap_or("");
+            // 7.0's `TYPE OTHER` keeps the real words in a PHRASE
+            let ty = match (alt.child_value("TYPE"), alt.child("TYPE").and_then(|t| t.child_value("PHRASE"))) {
+                (Some(t), Some(phrase)) if t.eq_ignore_ascii_case("OTHER") => vocab::name_type(phrase),
+                (Some(t), _) => vocab::name_type(t),
+                _ => "",
+            };
             let name_id = edit::add_alternate_name(&mut self.pkg.doc, &id, &g, &s, ty)?;
             if !extras.is_empty() {
                 edit::set_name_extras(&mut self.pkg.doc, &id, Some(&name_id), &extras)?;
