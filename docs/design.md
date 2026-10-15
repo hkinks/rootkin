@@ -390,8 +390,9 @@ apart (10 if one is missing), 5 for the same death year, 10 each for a shared pa
 | `HomePersonId`, `LastSavedPersonId` | point to the kept person |
 
 After the removed person is deleted (`edit::delete_person`), children of the kept person with both members of a couple
-as parents get their `FamilyChildLink` to that couple. Not handled: a merge that makes a person their own ancestor
-(the two were more distant relatives) is not detected; a citation's quality and notes are not compared.
+as parents get their `FamilyChildLink` to that couple. A merge that would make the person their own ancestor
+(one descends from the other through someone else) is refused, as is `edit::link_parent` closing a loop of any
+length (`edit::is_ancestor`); the tree layout also skips anyone already on the path it follows. Not handled: a citation's quality and notes are not compared.
 
 ## Architecture
 

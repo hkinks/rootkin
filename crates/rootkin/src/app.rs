@@ -1389,7 +1389,7 @@ impl eframe::App for App {
                 let nav = NavState { can_back: !self.history.is_empty(), can_forward: !self.future.is_empty() };
                 let (pkg, photos, tree) = (self.pkg.as_ref().expect("checked"), &mut self.photos, &self.tree);
                 let mut photo = |p: &Person| photos.face(&ctx, pkg, tree, p);
-                match self.tree_view.ui(ui, &self.tree, &focus, nav, &mut photo) {
+                match self.tree_view.ui(ui, &self.tree, self.tree_epoch, &focus, nav, &mut photo) {
                     Some(TreeAction::Focus(id)) => self.select(&id),
                     Some(TreeAction::Back) => self.go_back(false),
                     Some(TreeAction::Forward) => self.go_back(true),

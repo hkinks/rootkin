@@ -32,6 +32,8 @@ pub struct RelationDialog {
     couple: bool,
     /// The existing parent to couple with, if the checkbox applies and is on.
     couple_with: Option<Id>,
+    /// People "Existing person" doesn't offer: they would become their own ancestor.
+    excluded: std::collections::HashSet<Id>,
 }
 
 impl RelationDialog {
@@ -48,6 +50,7 @@ impl RelationDialog {
             focus_given: true,
             couple: true,
             couple_with: None,
+            excluded: Default::default(),
         }
     }
 
@@ -64,12 +67,24 @@ impl RelationDialog {
             },
             Relation::Child => Gender::Unknown,
         };
+        let co_parent = (relation == Relation::Child && spouses.len() == 1).then(|| spouses[0].to_string());
+        // a parent can't be a descendant, a child can't be an ancestor (also of the other parent)
+        let excluded = match relation {
+            Relation::Parent => tree.descendants(anchor).into_iter().map(String::from).collect(),
+            Relation::Child => std::iter::once(anchor)
+                .chain(co_parent.as_deref())
+                .flat_map(|p| tree.ancestors(p))
+                .map(String::from)
+                .collect(),
+            Relation::Spouse => Default::default(),
+        };
         RelationDialog {
             gender,
+            excluded,
+            co_parent,
             relation: Some((relation, anchor.to_string())),
             // children usually share the surname; parents/spouses often don't
             surname: if relation == Relation::Child { anchor_surname.unwrap_or_default() } else { String::new() },
-            co_parent: (relation == Relation::Child && spouses.len() == 1).then(|| spouses[0].to_string()),
             ..Self::new_unrelated()
         }
     }
@@ -130,7 +145,7 @@ impl App {
                     .tree
                     .people
                     .iter()
-                    .filter(|p| Some(p.id.as_str()) != anchor)
+                    .filter(|p| Some(p.id.as_str()) != anchor && !dlg.excluded.contains(&p.id))
                     .filter(|p| needle.is_empty() || p.display_name().to_lowercase().contains(&needle))
                     .collect();
                 people.sort_by_cached_key(|p| sort_key(p));
@@ -275,4 +290,24 @@ fn commit(doc: &mut Document, dlg: &RelationDialog) -> EditResult<Id> {
         }
     }
     Ok(other)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn existing_person_never_offers_someone_who_would_become_their_own_ancestor() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../familyx/tests/data/example.familyx");
+        let tree = Tree::from_doc(&familyx::Package::open(path).unwrap().doc);
+        let id = |name: &str| tree.people.iter().find(|p| p.display_name() == name).unwrap().id.clone();
+        let parent_of_erik = RelationDialog::new(Relation::Parent, &id("Erik Lindqvist"), &tree);
+        for descendant in ["Leo Lindqvist", "Nora Lindqvist"] {
+            assert!(parent_of_erik.excluded.contains(&id(descendant)), "{descendant}");
+        }
+        assert!(!parent_of_erik.excluded.contains(&id("Sofia Rahe")));
+        let child_of_erik = RelationDialog::new(Relation::Child, &id("Erik Lindqvist"), &tree);
+        assert!(child_of_erik.excluded.contains(&id("Karl Lindqvist")));
+        assert!(!child_of_erik.excluded.contains(&id("Leo Lindqvist")));
+    }
 }

@@ -37,6 +37,11 @@ pub struct MergeOptions {
 /// (the app's undo does).
 pub fn merge_people(doc: &mut Document, keep: &str, remove: &str, opts: MergeOptions) -> EditResult<()> {
     edit::validate_pair(doc, keep, remove)?;
+    if would_be_own_ancestor(&Tree::from_doc(doc), keep, remove) {
+        return Err(EditError::Invalid(
+            "one of the two descends from the other, so merging them would make the person their own ancestor",
+        ));
+    }
     merge_links(doc, keep, remove)?;
     merge_data(doc, keep, remove, opts)?;
     if let Some(props) = doc.root.child_mut("FamilyProperties") {
@@ -52,6 +57,31 @@ pub fn merge_people(doc: &mut Document, keep: &str, remove: &str, opts: MergeOpt
     attach_children_to_couples(doc, keep)?;
     doc.forget_index();
     Ok(())
+}
+
+/// Whether the merged person would descend from themselves. A direct parent link between the two
+/// is dropped by the merge, so only longer paths count (e.g. merging a grandparent with a grandchild).
+fn would_be_own_ancestor(tree: &Tree, keep: &str, remove: &str) -> bool {
+    let merged = |id: &str| if id == remove { keep.to_string() } else { id.to_string() };
+    let between = |a: &str, b: &str| (a == keep && b == remove) || (a == remove && b == keep);
+    let children = |p: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        for from in if p == keep { vec![keep, remove] } else { vec![p] } {
+            out.extend(tree.child_links_of(from).filter(|l| !between(from, &l.child)).map(|l| merged(&l.child)));
+        }
+        out
+    };
+    let mut seen = HashSet::new();
+    let mut stack = children(keep);
+    while let Some(c) = stack.pop() {
+        if c == keep {
+            return true;
+        }
+        if seen.insert(c.clone()) {
+            stack.extend(children(&c));
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------- links

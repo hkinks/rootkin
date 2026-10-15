@@ -575,6 +575,22 @@ fn link_kind_between(doc: &Document, kind: &str, a: &str, b: &str, ordered: bool
         .map(|l| l.attr("Id").unwrap_or_default().into_owned())
 }
 
+/// Whether `ancestor` is a parent, grandparent, ... of `person` (any number of generations).
+pub fn is_ancestor(doc: &Document, ancestor: &str, person: &str) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = parents_of(doc, person);
+    while let Some(p) = stack.pop() {
+        if p == ancestor {
+            return true;
+        }
+        let up = parents_of(doc, &p);
+        if seen.insert(p) {
+            stack.extend(up);
+        }
+    }
+    false
+}
+
 fn parents_of(doc: &Document, child: &str) -> Vec<Id> {
     doc.parents_of(child)
 }
@@ -625,6 +641,9 @@ pub fn link_parent(doc: &mut Document, child: &str, parent: &str) -> EditResult<
     }
     if link_kind_between(doc, "ParentChildLink", child, parent, true).is_some() {
         return Err(EditError::Invalid("that person is already a child of this one"));
+    }
+    if is_ancestor(doc, child, parent) {
+        return Err(EditError::Invalid("that person descends from this one and can't also be their parent"));
     }
     let other_parents = parents_of(doc, child);
     collection_keep(doc, "RelationshipCollection").push(new_link("ParentChildLink", parent, child));

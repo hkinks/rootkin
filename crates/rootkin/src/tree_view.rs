@@ -18,6 +18,8 @@ pub struct TreeView {
     pub settings: Settings,
     /// Screen rectangle of the canvas in the last frame (for image export).
     pub canvas: Rect,
+    /// The last layout and what it was built for: (tree epoch, focus, settings).
+    cache: Option<(u64, Id, Settings, std::rc::Rc<Layout>)>,
 }
 
 impl Default for TreeView {
@@ -30,6 +32,7 @@ impl Default for TreeView {
             auto_fit: true,
             settings: Settings::default(),
             canvas: Rect::NOTHING,
+            cache: None,
         }
     }
 }
@@ -91,10 +94,25 @@ impl TreeView {
         self.target = None;
     }
 
+    /// The layout for this tree version, focus and settings, built only when one of them changed.
+    pub fn layout(&mut self, tree: &Tree, tree_epoch: u64, focus: &str) -> std::rc::Rc<Layout> {
+        match &self.cache {
+            Some((epoch, f, settings, layout)) if *epoch == tree_epoch && f == focus && *settings == self.settings => {
+                layout.clone()
+            }
+            _ => {
+                let layout = std::rc::Rc::new(layout::layout(tree, focus, self.settings));
+                self.cache = Some((tree_epoch, focus.to_string(), self.settings, layout.clone()));
+                layout
+            }
+        }
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         tree: &Tree,
+        tree_epoch: u64,
         focus: &str,
         nav: NavState,
         photo: &mut PhotoFn,
@@ -102,7 +120,7 @@ impl TreeView {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let canvas = response.rect;
         self.canvas = canvas;
-        let layout = layout::layout(tree, focus, self.settings);
+        let layout = self.layout(tree, tree_epoch, focus);
         if self.last_focus.as_deref() != Some(focus) {
             self.auto_fit = true;
             self.last_focus = Some(focus.to_string());
