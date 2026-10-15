@@ -1,6 +1,6 @@
 //! The `.familyx` OPC (zip) container.
 
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Write};
 use std::path::Path;
 
 use crate::codec::{AesVersion, SourceFormat, PART_NAMES};
@@ -160,6 +160,17 @@ impl Package {
         Ok(report)
     }
 
+    /// The media id of a photo whose file holds exactly `bytes`, if there is one.
+    pub fn photo_with_bytes(&self, bytes: &[u8]) -> Option<Id> {
+        let part = self.parts.iter().find(|(n, d)| n.starts_with("Multimedia/") && d.as_slice() == bytes)?.0.as_str();
+        self.doc
+            .root
+            .child("PackagedFileCollection")?
+            .children_named("PackagedFile")
+            .find(|f| f.child_text("RelativePath").is_some_and(|p| p.replace('\\', "/") == part))
+            .and_then(|f| f.attr("Id").map(|id| id.into_owned()))
+    }
+
     /// Attach a photo already in the package to another person.
     pub fn share_photo(&mut self, person_id: &str, media_id: &str) -> Result<()> {
         edit::link_photo(&mut self.doc, person_id, media_id).map_err(|e| Error::Format(e.to_string()))
@@ -216,12 +227,23 @@ impl Package {
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let mut zip = zip::ZipArchive::new(Cursor::new(bytes))?;
-        let mut entries = Vec::with_capacity(zip.len());
+        use crate::limits::{read_limited, too_big, MAX_ENTRY, MAX_TOTAL};
+        // sizes declared in the zip are not trusted: read through limits instead
+        let mut entries = Vec::new();
+        let mut total = 0u64;
         for i in 0..zip.len() {
-            let mut entry = zip.by_index(i)?;
-            let mut data = Vec::with_capacity(entry.size() as usize);
-            entry.read_to_end(&mut data)?;
-            entries.push((entry.name().to_string(), data));
+            let entry = zip.by_index(i)?;
+            let name = entry.name().to_string();
+            let left = MAX_TOTAL - total;
+            let data = read_limited(entry, MAX_ENTRY.min(left), &name).map_err(|e| {
+                if left < MAX_ENTRY && matches!(e, Error::Format(_)) {
+                    too_big("the package", MAX_TOTAL)
+                } else {
+                    e
+                }
+            })?;
+            total += data.len() as u64;
+            entries.push((name, data));
         }
         // The newest tree part present wins; any others are carried along verbatim.
         let family_index =

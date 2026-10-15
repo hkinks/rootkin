@@ -410,6 +410,21 @@ as parents get their `FamilyChildLink` to that couple. Not handled: a merge that
 
 New elements must follow XmlSerializer child order (see `ensure_child`).
 
+### Limits for untrusted input (`familyx::limits`)
+
+A damaged or hostile file gives an error naming the problem instead of crashing or exhausting memory:
+
+- XML (`.familyx` tree, Gramps) and GEDCOM records nested more than 256 levels are refused (the app's trees
+  nest about 10). Writing, cloning and dropping the tree recurse, so this keeps them off the stack limit.
+- Every zip entry, the inflated tree part and a gunzipped Gramps file are read through a limit of 1 GB each,
+  and a `.familyx` package unpacks to at most 2 GB in total. Sizes declared in the zip are never used to
+  allocate.
+- Zipped imports (`.gdz`, `.zip`): each entry is read once (1 GB per file); photos beyond 2 GB in total are
+  left out and reported as not found. A file referenced several times is stored once and shared
+  (`Package::photo_with_bytes`).
+- The story database reader (`litedb`) reads every index node, document and extend page at most once and
+  refuses BSON nested more than 32 levels; RTF notes are read character-safe.
+
 ## Import/export formats (`rootkin-formats`)
 
 API: `import(bytes, Format) -> (Package, ImportReport)`, `export(&Package, Format) -> Vec<u8>`,

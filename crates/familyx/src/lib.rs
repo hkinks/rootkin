@@ -13,6 +13,7 @@ pub mod duplicates;
 pub mod edit;
 mod index;
 mod lds_temples;
+pub mod limits;
 pub mod litedb;
 pub mod merge;
 pub mod migrate;

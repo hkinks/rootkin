@@ -406,7 +406,7 @@ fn attach(stack: &mut [(u32, Node)], roots: &mut Vec<Node>, done: Node) {
 }
 
 /// Build the record tree, merging CONC / CONT lines into their parent's value.
-fn parse(text: &str, warnings: &mut Vec<String>) -> Vec<Node> {
+fn parse(text: &str, warnings: &mut Vec<String>) -> Result<Vec<Node>> {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     let mut roots = Vec::new();
     let mut stack: Vec<(u32, Node)> = Vec::new();
@@ -439,6 +439,10 @@ fn parse(text: &str, warnings: &mut Vec<String>) -> Vec<Node> {
             }
             continue;
         }
+        // the record tree is used recursively: refuse what would overflow the stack
+        if stack.len() >= familyx::limits::MAX_DEPTH {
+            return Err(Error::Gedcom(familyx::limits::too_deep("the GEDCOM file")));
+        }
         stack.push((level, Node { tag, xref, value, children: Vec::new() }));
     }
     while let Some((_, done)) = stack.pop() {
@@ -447,7 +451,7 @@ fn parse(text: &str, warnings: &mut Vec<String>) -> Vec<Node> {
     if bad > 0 {
         warnings.push(format!("skipped {bad} malformed line(s), first at line {first_bad}"));
     }
-    roots
+    Ok(roots)
 }
 
 /// `Given /Surname/ Suffix` -> (given, surname, suffix).
@@ -492,7 +496,7 @@ struct Importer<'a> {
 pub fn import(bytes: &[u8], resolve: Resolve) -> Result<(Package, ImportReport)> {
     let mut warnings = Vec::new();
     let text = decode(bytes, &mut warnings);
-    let roots = parse(&text, &mut warnings);
+    let roots = parse(&text, &mut warnings)?;
     if roots.first().map(|n| n.tag.as_str()) != Some("HEAD") {
         return Err(Error::Gedcom("not a GEDCOM file (no HEAD record)".into()));
     }
@@ -947,7 +951,7 @@ mod tests {
         assert!(w.out.lines().all(|l| l.len() <= 255), "line too long");
         assert!(w.out.contains("CONC") && w.out.contains("CONT"));
         let mut warnings = Vec::new();
-        let roots = parse(&w.out, &mut warnings);
+        let roots = parse(&w.out, &mut warnings).unwrap();
         assert_eq!(roots[0].children[0].value, value);
     }
 

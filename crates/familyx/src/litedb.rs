@@ -19,7 +19,7 @@
 //! Deleted or rewritten documents may leave unreferenced blocks in the file; only what the primary-key
 //! index reaches is read.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use sha1::{Digest, Sha1};
@@ -31,6 +31,8 @@ const PAGE_HEADER: usize = 25;
 const HEADER_INFO: &[u8] = b"** This is a LiteDB file **";
 const FILE_VERSION: u8 = 7;
 const NO_PAGE: u32 = u32::MAX;
+/// File records and chunks are flat documents; deeper nesting means a damaged file.
+const MAX_BSON_DEPTH: usize = 32;
 
 fn bad(what: &str) -> Error {
     Error::Format(format!("litedb: {what}"))
@@ -249,24 +251,29 @@ fn documents(pages: &Pages, collection: &[u8]) -> Result<Vec<Bson>> {
     let mut index_pages: HashMap<u32, HashMap<u16, IndexNode>> = HashMap::new();
     let mut out = Vec::new();
     let mut node = head;
-    let mut guard = 0usize;
+    // a damaged file may link nodes, blocks or extend pages in a loop: each is read once at most
+    let mut seen_nodes = HashSet::new();
+    let mut seen_blocks = HashSet::new();
+    let mut seen_extends = HashSet::new();
     loop {
+        if !seen_nodes.insert(node) {
+            return Err(bad("index loop"));
+        }
         if let std::collections::hash_map::Entry::Vacant(entry) = index_pages.entry(node.0) {
             entry.insert(index_nodes(pages.typed(node.0, 3)?)?);
         }
         let current = index_pages[&node.0].get(&node.1).ok_or_else(|| bad("dangling index node"))?;
         if node != head && node != tail {
-            out.push(read_document(pages, current.block)?);
+            if !seen_blocks.insert(current.block) {
+                return Err(bad("two index entries share a document"));
+            }
+            out.push(read_document(pages, current.block, &mut seen_extends)?);
         }
         let next = current.next;
         if next.0 == NO_PAGE || next == tail {
             break;
         }
         node = next;
-        guard += 1;
-        if guard > pages.count() * PAGE_SIZE {
-            return Err(bad("index loop"));
-        }
     }
     Ok(out)
 }
@@ -304,7 +311,7 @@ fn index_nodes(page: &[u8]) -> Result<HashMap<u16, IndexNode>> {
 }
 
 /// The BSON document in a data block, following the extend pages of a large one.
-fn read_document(pages: &Pages, block: (u32, u16)) -> Result<Bson> {
+fn read_document(pages: &Pages, block: (u32, u16), seen_extends: &mut HashSet<u32>) -> Result<Bson> {
     let page = pages.typed(block.0, 4)?;
     let count = u16::from_le_bytes(page[13..15].try_into().unwrap());
     let mut r = Reader::at(page, PAGE_HEADER);
@@ -321,16 +328,14 @@ fn read_document(pages: &Pages, block: (u32, u16)) -> Result<Bson> {
         }
         let mut all = Vec::new();
         let mut next = extend;
-        let mut hops = 0usize;
         while next != NO_PAGE {
+            if !seen_extends.insert(next) {
+                return Err(bad("extend page loop"));
+            }
             let ext = pages.typed(next, 5)?;
             let used = usize::from(u16::from_le_bytes(ext[13..15].try_into().unwrap()));
             all.extend_from_slice(ext.get(PAGE_HEADER..PAGE_HEADER + used).ok_or_else(|| bad("bad extend page"))?);
             next = u32::from_le_bytes(ext[9..13].try_into().unwrap());
-            hops += 1;
-            if hops > pages.count() {
-                return Err(bad("extend page loop"));
-            }
         }
         return Bson::parse_document(&all);
     }
@@ -375,10 +380,13 @@ impl Bson {
     }
 
     fn parse_document(data: &[u8]) -> Result<Bson> {
-        Self::document(&mut Reader::at(data, 0), false)
+        Self::document(&mut Reader::at(data, 0), false, 0)
     }
 
-    fn document(r: &mut Reader, array: bool) -> Result<Bson> {
+    fn document(r: &mut Reader, array: bool, depth: usize) -> Result<Bson> {
+        if depth > MAX_BSON_DEPTH {
+            return Err(bad("documents nested too deeply"));
+        }
         let length = usize::try_from(r.i32()?).map_err(|_| bad("negative document length"))?;
         let end = (r.pos + length).checked_sub(5).ok_or_else(|| bad("short document"))?;
         let mut map = HashMap::new();
@@ -392,9 +400,9 @@ impl Bson {
                     let raw = r.bytes(n)?;
                     Bson::Str(String::from_utf8_lossy(raw.strip_suffix(&[0]).unwrap_or(raw)).into_owned())
                 }
-                0x03 => Self::document(r, false)?,
+                0x03 => Self::document(r, false, depth + 1)?,
                 0x04 => {
-                    Self::document(r, true)?;
+                    Self::document(r, true, depth + 1)?;
                     Bson::Other
                 }
                 0x05 => {

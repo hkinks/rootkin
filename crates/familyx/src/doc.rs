@@ -61,7 +61,13 @@ impl Document {
             let event = reader.read_event().map_err(|e| xml_err(&reader, e))?;
             let raw = &body[start..reader.buffer_position() as usize];
             match event {
-                Event::Start(e) => stack.push(Element::from_start(&e)?),
+                Event::Start(e) => {
+                    // writing, cloning and dropping recurse: refuse what would overflow the stack
+                    if stack.len() >= crate::limits::MAX_DEPTH {
+                        return Err(Error::Xml(crate::limits::too_deep("the XML")));
+                    }
+                    stack.push(Element::from_start(&e)?)
+                }
                 Event::Empty(e) => {
                     let el = Element::from_start(&e)?;
                     match stack.last_mut() {
